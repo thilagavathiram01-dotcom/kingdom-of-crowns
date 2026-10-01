@@ -83,6 +83,21 @@ html.lock-landscape, html.lock-landscape body { overflow: hidden; overscroll-beh
   #app.gated > *:not(#rotate-gate) { transition: none; }
 }
 
+/* ===== Boot gate (model preload) ===== */
+#boot-gate {
+  position: fixed; inset: 0; z-index: 998;
+  display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 50% 30%, #17233c 0%, #0b0e14 70%);
+}
+.boot-card {
+  text-align: center; color: var(--text);
+  padding: 0 24px;
+}
+.boot-card h2 { margin: 14px 0 6px; font-size: 22px; letter-spacing: .04em; }
+.boot-card p { margin: 0; color: var(--muted); font-size: 14px; }
+.boot-card .rotate-crown { animation: bootpulse 1.6s ease-in-out infinite; }
+@keyframes bootpulse { 0%, 100% { opacity: .45; transform: scale(.94); } 50% { opacity: 1; transform: scale(1.04); } }
+
 /* ===== Top bar ===== */
 #topbar {
   position: absolute; top: 0; left: 0; right: 0; z-index: 20;

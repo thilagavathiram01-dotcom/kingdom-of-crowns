@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Game } from './game.js';
 import { AIManager } from './ai.js';
 import { HUD } from './ui.js';
+import { loadWorkerModels } from './workers3d.js';
 
 // visible error surface: never freeze silently — show what broke
 function showError(err) {
@@ -66,37 +67,52 @@ window.addEventListener('resize', () => syncOrientation());
 window.visualViewport?.addEventListener('resize', () => syncOrientation());
 
 const canvas = document.getElementById('game-canvas');
+const bootGate = document.getElementById('boot-gate');
 
 let hud, ai;
-const game = new Game(canvas, {
-  onSelect: (sel) => hud?.onSelect(sel),
-  onMessage: (t) => hud?.message(t),
-  onGameOver: (win, time) => hud?.showGameOver(win, time),
-});
 
-ai = new AIManager(game);
-hud = new HUD(game, ai);
-hud.onSelect([]);
-
-// starting camera on the human kingdom
-{
-  const hq = game.hqOf(game.humanId);
-  if (hq) game.camTarget.set(hq.x, 0, hq.z);
-}
-game.setSelection([]);
-
-const clock = new THREE.Clock();
-function loop() {
-  requestAnimationFrame(loop);
+// worker models are ~1.6MB of glTF: preload before the first frame so workers
+// never pop in as boxes. Any failure just keeps the original box workers.
+async function boot() {
+  let workerModels = null;
   try {
-    const dt = Math.min(clock.getDelta(), 0.05);
-    game.update(dt);
-    ai.update(dt);
-    hud.frame(dt);
-    game.render();
+    workerModels = await loadWorkerModels();
   } catch (err) {
-    showError(err);
-    throw err;
+    console.warn('worker models unavailable — falling back to box workers', err);
   }
+
+  const game = new Game(canvas, {
+    onSelect: (sel) => hud?.onSelect(sel),
+    onMessage: (t) => hud?.message(t),
+    onGameOver: (win, time) => hud?.showGameOver(win, time),
+  }, { workerModels });
+
+  ai = new AIManager(game);
+  hud = new HUD(game, ai);
+  hud.onSelect([]);
+
+  // starting camera on the human kingdom
+  {
+    const hq = game.hqOf(game.humanId);
+    if (hq) game.camTarget.set(hq.x, 0, hq.z);
+  }
+  game.setSelection([]);
+
+  const clock = new THREE.Clock();
+  function loop() {
+    requestAnimationFrame(loop);
+    try {
+      const dt = Math.min(clock.getDelta(), 0.05);
+      game.update(dt);
+      ai.update(dt);
+      hud.frame(dt);
+      game.render();
+    } catch (err) {
+      showError(err);
+      throw err;
+    }
+  }
+  bootGate?.remove();
+  loop();
 }
-loop();
+boot();

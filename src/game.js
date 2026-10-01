@@ -1,13 +1,16 @@
 import * as THREE from 'three';
 import { CONFIG, COLORS, kingdomColor, kingdomName } from './config.js';
 import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite } from './terrain.js';
+import { createWorkerRig, updateWorkerRig as animateWorkerRig } from './workers3d.js';
 
 let UID = 1;
 
 export class Game {
-  constructor(canvas, hooks) {
+  constructor(canvas, hooks, assets = {}) {
     this.canvas = canvas;
     this.hooks = hooks; // { onSelect, onResources, onMessage, onGameOver }
+    // skinned Cave Man worker models, or null -> plain box workers
+    this.workerModels = !!assets.workerModels;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     this.scene = new THREE.Scene();
@@ -342,13 +345,19 @@ export class Game {
     x = free.x; z = free.z;
     const g = new THREE.Group();
     let body;
+    let rig = null;
+    if (type === 'worker' && this.workerModels) rig = createWorkerRig(this.teamColor(owner));
     const mat = new THREE.MeshStandardMaterial({ color: this.teamColor(owner), roughness: 0.6 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
     if (type === 'worker') {
+      // box stays as the far-LOD stand-in once the Cave Man rig takes over
       body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.9), mat);
       body.position.y = 0.55;
-      const helm = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.5), dark);
-      helm.position.y = 1.15; g.add(helm);
+      if (rig) body.visible = false;
+      else {
+        const helm = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.5), dark);
+        helm.position.y = 1.15; g.add(helm);
+      }
     } else if (type === 'soldier') {
       body = new THREE.Mesh(new THREE.CapsuleGeometry(0.45, 0.7, 4, 10), mat);
       body.position.y = 0.85;
@@ -382,6 +391,7 @@ export class Game {
     }
     body.castShadow = true;
     g.add(body);
+    if (rig) g.add(rig.root);
     // team underglow disc + worker cargo gem
     const glow = new THREE.Mesh(new THREE.CircleGeometry(st.radius + 0.15, 24),
       new THREE.MeshBasicMaterial({ color: this.teamColor(owner), transparent: true, opacity: 0.35 }));
@@ -401,7 +411,7 @@ export class Game {
     const ring = this.addSelectionRing(g, st.radius + 0.35, COLORS.select);
     this.scene.add(g);
     const u = {
-      id: UID++, kind: 'unit', type, owner, mesh: g, gem, ring, bar,
+      id: UID++, kind: 'unit', type, owner, mesh: g, gem, ring, bar, body, rig,
       x, z, hp: st.hp, maxHp: st.hp, speed: st.speed,
       damage: st.damage, range: st.range, cooldown: st.cooldown, aggro: st.aggro,
       radius: st.radius, cd: Math.random() * 0.3, tx: x, tz: z, hasOrder: false,
@@ -1461,6 +1471,18 @@ export class Game {
     }
   }
 
+  // worker rig LOD: skinning dozens of Cave Men is wasted work off-camera, so
+  // only rigs inside the fog ring animate and the rest fall back to a plain box.
+  updateWorkerRig(u, dt, moved) {
+    const r = u.rig;
+    const near = Math.hypot(u.x - this.camTarget.x, u.z - this.camTarget.z) < 95;
+    if (near !== r.root.visible) {
+      r.root.visible = near;
+      if (u.body) u.body.visible = !near;
+    }
+    if (near) animateWorkerRig(r, dt, moved > 0.002);
+  }
+
   update(dt) {
     if (this.over) return;
     this.time += dt;
@@ -1519,6 +1541,8 @@ export class Game {
       u.cd -= dt;
       u.lastShotT = (u.lastShotT ?? 99) + dt;
       this.updateUnit(u, dt);
+      // sampled before lastX/lastZ roll over: the rig needs real frame movement
+      const moved = Math.hypot(u.x - u.lastX, u.z - u.lastZ);
       // unstick: barely moved while path-following -> drop cache, repath, tiny sidestep.
       // Anchored (firing) units are exempt — they are SUPPOSED to stand still.
       const followingPath = (u.hasOrder || u.target) && u.path && u.path.length && !u.fireAnchor;
@@ -1560,6 +1584,7 @@ export class Game {
         }
       }
       // selection ring pulse + worker cargo gem
+      if (u.rig) this.updateWorkerRig(u, dt, moved);
       if (u.gem) {
         u.gem.visible = u.carrying > 0;
         if (u.gem.visible) u.gem.rotation.y += dt * 3;
