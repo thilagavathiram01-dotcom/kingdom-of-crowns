@@ -562,7 +562,21 @@ export class Game {
     this.pendingOrder = null;   // 'move' | 'attack' | 'harvest' | null (mobile + M key)
     this.placement = null;      // { type:'barracks', x, z, valid } ghost preview
     this.touchState = null;
+    // MOBILE INPUT ONLY: camera-pan vs box-select for single-finger drag.
+    // Real mobile RTS = drag pans the map; box-select is opt-in via dock toggle.
+    // Game simulation / orders / AI untouched.
+    this.panMode = (typeof window !== 'undefined' && window.matchMedia?.('(hover: none)').matches) || ('ontouchstart' in window);
+    this._isTouch = this.panMode;
     const box = document.getElementById('selection-box');
+
+    const panByPixels = (dxPx, dyPx) => {
+      const s = this.camDist / 700;
+      const f = new THREE.Vector3(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
+      const r = new THREE.Vector3(f.z, 0, -f.x);
+      this.camTarget.x = THREE.MathUtils.clamp(this.camTarget.x - dxPx * s * r.x, -this.mapBound(4), this.mapBound(4));
+      this.camTarget.z = THREE.MathUtils.clamp(this.camTarget.z - dxPx * s * r.z - dyPx * s, -this.mapBound(4), this.mapBound(4));
+    };
+    const buzz = (ms = 12) => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch { /* noop */ } };
 
     const setBox = (a, b) => {
       const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
@@ -620,14 +634,33 @@ export class Game {
       if (hit && hit.kind === 'unit' && hit.owner === this.humanId) this.selectSameType(hit);
     });
 
-    // ----- touch -----
+    // ----- touch (mobile-first: tap orders, 1-finger drag pans, pinch zooms) -----
     el.addEventListener('touchstart', e => {
       e.preventDefault();
+      this._isTouch = true;
       const t = e.touches;
       if (t.length === 1) {
-        this.touchState = { x0: t[0].clientX, y0: t[0].clientY, x: t[0].clientX, y: t[0].clientY, t0: performance.now(), moved: false, box: false };
+        this.touchState = {
+          x0: t[0].clientX, y0: t[0].clientY, x: t[0].clientX, y: t[0].clientY,
+          t0: performance.now(), moved: false, box: false, panning: false,
+          camX: this.camTarget.x, camZ: this.camTarget.z,
+          longFired: false,
+        };
+        // long-press (550ms, held still) = select same type (mobile double-click)
+        const st = this.touchState;
+        st.longT = setTimeout(() => {
+          if (!st.moved && !this.placement && this.touchState === st) {
+            st.longFired = true;
+            const hit = this.pickEntities(st.x, st.y, false);
+            if (hit && hit.kind === 'unit' && hit.owner === this.humanId) {
+              this.selectSameType(hit);
+              buzz(20);
+            }
+          }
+        }, 550);
       } else if (t.length === 2) {
         const dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+        if (this.touchState?.longT) clearTimeout(this.touchState.longT);
         this.touchState = { pinch: Math.hypot(dx, dy), midX: (t[0].clientX + t[1].clientX) / 2, midY: (t[0].clientY + t[1].clientY) / 2, two: true, camX: this.camTarget.x, camZ: this.camTarget.z, camD: this.camDist };
         this.dragging = false; box.classList.add('hidden');
       }
@@ -651,14 +684,24 @@ export class Game {
         return;
       }
       if (t.length === 1) {
-        st.x = t[0].clientX; st.y = t[0].clientY;
-        if (Math.hypot(st.x - st.x0, st.y - st.y0) > 12) st.moved = true;
+        const px = t[0].clientX, py = t[0].clientY;
+        const dx = px - st.x, dy = py - st.y;
+        st.x = px; st.y = py;
+        if (Math.hypot(st.x - st.x0, st.y - st.y0) > 14) {
+          st.moved = true;
+          if (st.longT) { clearTimeout(st.longT); st.longT = null; }
+        }
         if (this.placement) {
           const p = this.screenToGround(st.x, st.y);
           if (p) this.updateGhost(p.x, p.z);
           return;
         }
-        if (st.moved && !this.pendingOrder) {
+        if (!st.moved) return;
+        if (this.panMode && !this.pendingOrder) {
+          // real-RTS mobile: single-finger drag pans the camera
+          st.panning = true;
+          panByPixels(dx, dy);
+        } else if (!this.pendingOrder) {
           st.box = true;
           setBox({ x: st.x0, y: st.y0 }, { x: st.x, y: st.y });
         }
@@ -670,6 +713,8 @@ export class Game {
       const st = this.touchState;
       this.touchState = null;
       if (!st || st.two) return;
+      if (st.longT) { clearTimeout(st.longT); st.longT = null; }
+      if (st.longFired) return; // long-press already handled
       if (this.placement) {
         if (!st.moved) { const p = this.screenToGround(st.x, st.y); if (p) this.confirmPlacement(p.x, p.z); }
         return;
@@ -678,10 +723,16 @@ export class Game {
         // tap
         if (this.pendingOrder) { this.orderAtPoint(st.x, st.y, this.pendingOrder); this.setOrderMode(null); }
         else this.tapSelect(st.x, st.y);
-      } else if (st.box) {
+      } else if (st.box && !st.panning) {
         this.boxSelect({ x: st.x0, y: st.y0 }, { x: st.x, y: st.y });
       }
+      // panning drags need no order — camera already moved
     }, { passive: false });
+    el.addEventListener('touchcancel', () => {
+      if (this.touchState?.longT) clearTimeout(this.touchState.longT);
+      this.touchState = null;
+      box.classList.add('hidden');
+    });
 
     window.addEventListener('keydown', e => {
       const k = e.key.toLowerCase();
@@ -713,6 +764,9 @@ export class Game {
       }
     });
     window.addEventListener('keyup', e => { this.keys[e.key.toLowerCase()] = false; });
+    // MOBILE INPUT ONLY: keep canvas sized on rotate / URL-bar show-hide
+    window.addEventListener('orientationchange', () => setTimeout(() => this.resize(), 120));
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', () => this.resize());
   }
 
   setOrderMode(mode) {

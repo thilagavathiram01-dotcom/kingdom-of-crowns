@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#0b0e14" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>War of Crowns — 30 Kingdoms RTS</title>
   <link rel="stylesheet" href="/src/style.css" />
 </head>
@@ -11,70 +14,117 @@
   <div id="app">
     <canvas id="game-canvas"></canvas>
 
-    <!-- Top bar -->
-    <div id="topbar">
-      <div class="logo">WAR OF CROWNS</div>
-      <div class="res"><span class="ric" data-ric="harvest"></span><span id="res-crystal">0</span></div>
-      <div class="res"><span class="ric" data-ric="supply"></span><span id="res-supply">0/0</span></div>
-      <div class="res hide-small"><span class="ric" data-ric="clock"></span><span id="game-time">00:00</span></div>
-      <div class="res ai-status"><span class="ric" data-ric="scout"></span><span id="ai-status">Scouting…</span></div>
-      <button id="btn-help" aria-label="Help">?</button>
-    </div>
-
-    <!-- Selection box -->
-    <div id="selection-box" class="hidden"></div>
-    <div id="order-banner" class="hidden"></div>
-
-    <!-- Touch command bar (icons hydrated by JS; works with mouse too) -->
-    <div id="touchbar">
-      <button data-act="army" title="Select army (F)">army</button>
-      <button data-act="workers" title="Select workers (G)">workers</button>
-      <button data-order="move" title="Move here (M)">move</button>
-      <button data-order="attack" title="Attack target">attack</button>
-      <button data-order="harvest" title="Harvest crystal">harvest</button>
-      <button data-act="stop" title="Stop (X)">stop</button>
-      <button data-act="hq" title="Jump to HQ (H)">hq</button>
-      <button data-act="clear" title="Deselect (Esc)">clear</button>
-      <button data-act="zin" title="Zoom in">+</button>
-      <button data-act="zout" title="Zoom out">-</button>
-    </div>
-
-    <!-- Bottom panel -->
-    <div id="bottombar">
-      <div id="minimap-wrap" title="Tap minimap to jump camera"><canvas id="minimap" width="180" height="180"></canvas></div>
-      <div id="selection-info"><div class="hint">Tap ground to <b>move</b> • tap enemy to <b>attack</b> • tap crystal to <b>harvest</b></div></div>
-      <div id="build-menu">
-        <div class="build-title">Command</div>
-        <div id="build-buttons"></div>
+    <!-- Landscape gate: this RTS needs a wide screen (phones + tablets) -->
+    <div id="rotate-gate" class="hidden" aria-live="polite">
+      <div class="rotate-card">
+        <div class="rotate-phone" aria-hidden="true">
+          <div class="rotate-phone-screen">
+            <span class="rotate-crown">♛</span>
+          </div>
+        </div>
+        <h2>Rotate your device</h2>
+        <p>War of Crowns is a <b>landscape</b> strategy game.<br />Turn your phone or tablet sideways to continue.</p>
+        <button id="btn-rotate" type="button">Rotate now</button>
+        <p class="rotate-hint">No auto-rotate? Lock rotation manually from your browser or system settings.</p>
       </div>
     </div>
 
-    <div id="message-feed"></div>
+
+    <!-- Top command bar: resources + status -->
+    <header id="topbar">
+      <div class="tb-left">
+        <div class="logo"><span class="logo-crown">♛</span><span class="logo-text">WAR OF CROWNS</span></div>
+        <div class="tb-chip rank-chip hide-small" id="rank-chip" title="Your rank">👑 <span id="rank-text">–/30</span></div>
+      </div>
+      <div class="tb-center">
+        <div class="res" id="res-crystal-wrap"><span class="ric" data-ric="harvest"></span><span id="res-crystal">0</span></div>
+        <div class="res" id="res-supply-wrap"><span class="ric" data-ric="supply"></span><span id="res-supply">0/0</span></div>
+        <div class="res hide-small"><span class="ric" data-ric="clock"></span><span id="game-time">00:00</span></div>
+      </div>
+      <div class="tb-right">
+        <div class="res ai-status"><span class="ric" data-ric="scout"></span><span id="ai-status">Scouting…</span></div>
+        <button id="btn-panel" class="icon-circle" aria-label="Toggle panel" title="Show / hide command panel">▾</button>
+        <button id="btn-help" class="icon-circle" aria-label="Help">?</button>
+      </div>
+    </header>
+
+    <!-- Selection box + order banner -->
+    <div id="selection-box" class="hidden"></div>
+    <div id="order-banner" class="hidden"><span id="order-banner-text"></span><button id="order-cancel" aria-label="Cancel order">✕</button></div>
+
+    <!-- Right command dock: real-RTS touch commands -->
+    <nav id="touchbar" aria-label="Commands">
+      <div class="dock-group">
+        <button data-order="move" title="Move (M)" aria-label="Move"><span class="k">M</span></button>
+        <button data-order="attack" title="Attack" aria-label="Attack"><span class="k">A</span></button>
+        <button data-order="harvest" title="Harvest" aria-label="Harvest"><span class="k">H</span></button>
+        <button data-act="stop" title="Stop / Hold (X)" aria-label="Stop"></button>
+      </div>
+      <div class="dock-sep"></div>
+      <div class="dock-group">
+        <button data-act="army" title="Select army (F)" aria-label="Select army"></button>
+        <button data-act="workers" title="Select workers (G)" aria-label="Select workers"></button>
+        <button data-act="hq" title="Jump to HQ (H)" aria-label="Go to HQ"></button>
+        <button data-act="clear" title="Deselect (Esc)" aria-label="Deselect"></button>
+      </div>
+      <div class="dock-sep"></div>
+      <div class="dock-group dock-cam">
+        <button data-act="pan" title="Drag = pan camera / select box" aria-label="Toggle pan mode" id="btn-pan"></button>
+        <button data-act="zin" title="Zoom in" aria-label="Zoom in"></button>
+        <button data-act="zout" title="Zoom out" aria-label="Zoom out"></button>
+      </div>
+    </nav>
+
+    <!-- Bottom command deck -->
+    <footer id="bottombar">
+      <div id="minimap-wrap" title="Drag / tap minimap to move camera">
+        <canvas id="minimap" width="180" height="180"></canvas>
+        <div id="minimap-tag">MAP</div>
+      </div>
+      <div id="deck-center">
+        <div id="deck-tabs">
+          <button class="deck-tab active" data-tab="units">Units <span id="sel-count"></span></button>
+          <button class="deck-tab" data-tab="build">Command</button>
+          <button id="btn-focus" title="Focus selection (Space)">◎</button>
+        </div>
+        <div id="selection-info"><div class="hint">Tap ground to <b>move</b> • tap enemy to <b>attack</b> • tap crystal to <b>harvest</b></div></div>
+        <div id="build-menu" class="hidden">
+          <div id="build-buttons"></div>
+        </div>
+      </div>
+    </footer>
+
+    <div id="message-feed" aria-live="polite"></div>
+
     <div id="err-overlay" class="hidden">
       <h2>Something broke</h2>
       <pre id="err-text"></pre>
       <button onclick="location.reload()">Reload</button>
     </div>
+
     <div id="game-over" class="hidden">
-      <h1 id="game-over-title">Victory!</h1>
-      <p id="game-over-sub"></p>
-      <button id="btn-restart">Play again</button>
+      <div class="go-card">
+        <div class="go-crown">👑</div>
+        <h1 id="game-over-title">Victory!</h1>
+        <p id="game-over-sub"></p>
+        <button id="btn-restart">Play again</button>
+      </div>
     </div>
 
     <div id="help-overlay" class="hidden">
-      <h2>How to play</h2>
-      <ul>
-        <li><b>Select:</b> click / tap, drag a box, or double-click for same type. <b>G</b> workers, <b>F</b> army, <b>Shift+1-4</b> saves a group, <b>1-4</b> recalls it</li>
-        <li><b>Move freely:</b> with units selected, click / tap <b>any open ground</b> to move there</li>
-        <li><b>Fight:</b> click / tap a <b>visible</b> enemy to attack; use the crosshair button + target on mobile</li>
-        <li><b>Workers:</b> tap a crystal to harvest — cargo returns to HQ automatically; idle workers self-start</li>
-        <li><b>Fog of war:</b> dark areas hide enemies. Scouts see far — push them forward first</li>
-        <li><b>Build:</b> HQ trains Workers; Barracks trains Soldiers, Scouts, Tanks, Artillery; place Barracks + Turrets anywhere green; chain-place cheap <b>Walls</b> to funnel enemies (they chew through)</li>
-        <li><b>Win the crown:</b> 30 kingdoms spawn far apart on a vast continent — 29 AI + you. Expect a slow ~1 hour saga: rise undisturbed, then destroy every rival HQ while AI kingdoms raid and invade <b>each other</b> on a slow, random basis. Peace first, then total war.</li>
-        <li><b>Terrain:</b> mountains block, the river blocks — cross at the 3 lantern bridges. Forests hide ambushes; meadows grow your economy.</li>
-        <li><b>Camera:</b> WASD / arrows / edge pan, wheel / pinch zoom (far out to see the continent), Q/E rotate, 2-finger drag pans, tap minimap jumps</li>
-      </ul>
-      <button id="btn-close-help">Close</button>
+      <div class="help-card">
+        <h2>How to play</h2>
+        <ul>
+          <li><b>Tap:</b> select your unit / building. With units selected, tap <b>open ground</b> to move, <b>enemy</b> to attack, <b>crystal</b> to harvest.</li>
+          <li><b>Drag (1 finger):</b> pans the camera. <b>Pinch:</b> zoom. <b>2-finger drag:</b> pan. Toggle <b>⤢/▦</b> button for box-select drag.</li>
+          <li><b>Command dock (right):</b> Move / Attack / Harvest then tap a target — like a real RTS. Stop = hold position.</li>
+          <li><b>Bottom deck:</b> Units tab = who is selected, Command tab = train &amp; build. HQ trains Workers, Barracks trains the army.</li>
+          <li><b>Minimap:</b> tap or drag to jump the camera across the continent.</li>
+          <li><b>Desktop:</b> left-drag box-select, right-click orders, WASD/arrows pan, wheel zoom, Q/E rotate, F army, G workers, H HQ, X stop, M move order, 1-4 groups (Shift+1-4 saves).</li>
+          <li><b>Win:</b> destroy all <b>29 rival HQs</b>. Long peace first — scout with fast units, wall the bridges, then invade.</li>
+        </ul>
+        <button id="btn-close-help">Close</button>
+      </div>
     </div>
   </div>
   <script type="module" src="/src/main.js"></script>
