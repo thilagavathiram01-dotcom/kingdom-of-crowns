@@ -263,25 +263,37 @@ export class HUD {
     this.refreshBuildButtons();
   }
 
+  // RTS icon tile: big tappable icon + name + cost badge + queue badge.
+  // Tiles are built once per selection and only have disabled/badges updated
+  // in place, so taps never land on a button that is being rebuilt mid-press.
   trainBtn(building, type) {
     const meta = UNIT_META[type];
     const cost = meta.cost();
     const g = this.game;
     const b = document.createElement('button');
-    b.className = 'build-btn icon-btn';
-    b.innerHTML = `${icon(meta.icon)}<span class="t"><span class="n">${meta.name}</span><span class="d">${meta.desc} • ${cost} 🪵</span></span>`;
-    b.disabled = g.players[g.humanId].logs < cost;
+    b.className = 'tile';
+    b.dataset.kind = 'train';
+    b.dataset.bid = building.id;
+    b.dataset.utype = type;
+    b.dataset.cost = cost;
+    b.title = `${meta.name} — ${meta.desc} (🪵${cost})`;
+    b.setAttribute('aria-label', `Train ${meta.name}`);
+    b.innerHTML = `${icon(meta.icon)}<span class="tile-name">${meta.name}</span><span class="tile-cost">🪵${cost}</span><span class="tile-q hidden"></span>`;
     b.onclick = (e) => { e.stopPropagation(); g.trainUnit(building, type); buzz(12); this.onSelect(g.selected); };
     b.onmousedown = (e) => e.stopPropagation();
     b.onmouseup = (e) => e.stopPropagation();
     return b;
   }
 
-  actBtn(ico, name, desc, fn, disabled = false) {
+  actBtn(ico, name, desc, fn, cost = 0) {
     const b = document.createElement('button');
-    b.className = 'build-btn icon-btn';
-    b.innerHTML = `${icon(ico)}<span class="t"><span class="n">${name}</span><span class="d">${desc}</span></span>`;
-    b.disabled = disabled;
+    b.className = 'tile';
+    b.dataset.kind = 'act';
+    b.dataset.cost = cost;
+    b.title = cost > 0 ? `${name} — ${desc} (🪵${cost})` : `${name} — ${desc}`;
+    b.setAttribute('aria-label', name);
+    b.innerHTML = `${icon(ico)}<span class="tile-name">${name}</span>` +
+      (cost > 0 ? `<span class="tile-cost">🪵${cost}</span>` : '');
     b.onclick = (e) => { e.stopPropagation(); fn(); buzz(12); };
     b.onmousedown = (e) => e.stopPropagation();
     b.onmouseup = (e) => e.stopPropagation();
@@ -292,29 +304,60 @@ export class HUD {
     const g = this.game;
     const sel = g.selected;
     if (!this.elBuild) return;
-    const sig = sel.map(s => s.id).join(',') + '|' + Math.floor(g.players[g.humanId].logs) + '|' + (g.pendingOrder || '');
-    if (sig === this._buildSig) return;
-    this._buildSig = sig;
+    // structural signature only (selection + order mode). Affordability and
+    // queue badges refresh in place below — no rebuilds while tapping.
+    const sig = sel.map(s => s.id).join(',') + '|' + (g.pendingOrder || '');
+    if (sig !== this._buildSig) {
+      this._buildSig = sig;
+      this.rebuildButtons();
+    }
+    this.updateButtons();
+  }
+
+  // cheap per-tick sync: disabled state + queue badges, zero DOM rebuilds
+  updateButtons() {
+    const g = this.game;
+    if (!this.elBuild) return;
+    const logs = Math.floor(g.players[g.humanId].logs);
+    for (const b of this.elBuild.querySelectorAll('button.tile')) {
+      const cost = Number(b.dataset.cost || 0);
+      let disabled = logs < cost;
+      if (b.dataset.kind === 'train') {
+        const bd = g.buildings.find(x => x.id === Number(b.dataset.bid));
+        const q = bd && !bd.dead ? bd.queue.length : 0;
+        if (!bd || bd.dead) disabled = true;
+        const qel = b.querySelector('.tile-q');
+        if (qel) {
+          qel.textContent = q > 0 ? `+${q}` : '';
+          qel.classList.toggle('hidden', q === 0);
+        }
+      }
+      if (b.disabled !== disabled) b.disabled = disabled;
+    }
+  }
+
+  rebuildButtons() {
+    const g = this.game;
+    const sel = g.selected;
     this.elBuild.innerHTML = '';
-    const p = g.players[g.humanId];
     const ap = (el) => this.elBuild.appendChild(el);
 
     const single = sel.length === 1 ? sel[0] : null;
     if (single && single.kind === 'building' && single.owner === g.humanId && !single.dead) {
       if (single.type === 'hq') {
         ap(this.trainBtn(single, 'worker'));
-        ap(this.actBtn('barracks', 'Barracks', `${CONFIG.barracksCost} 🪵 • +supply, unlocks army`, () => g.startPlacement('barracks'), p.logs < CONFIG.barracksCost));
-        ap(this.actBtn('turret', 'Turret', `${CONFIG.turretCost} 🪵 • auto-defense`, () => g.startPlacement('turret'), p.logs < CONFIG.turretCost));
-        ap(this.actBtn('wall', 'Wall', `${CONFIG.wallCost} 🪵 • chain-place blocker`, () => g.startPlacement('wall'), p.logs < CONFIG.wallCost));
+        ap(this.actBtn('barracks', 'Barracks', '+supply, unlocks army', () => g.startPlacement('barracks'), CONFIG.barracksCost));
+        ap(this.actBtn('turret', 'Turret', 'auto-defense', () => g.startPlacement('turret'), CONFIG.turretCost));
+        ap(this.actBtn('wall', 'Wall', 'chain-place blocker', () => g.startPlacement('wall'), CONFIG.wallCost));
       } else if (single.type === 'barracks') {
         for (const t of ['soldier', 'scout', 'tank', 'artillery']) ap(this.trainBtn(single, t));
-        ap(this.actBtn('wall', 'Wall', `${CONFIG.wallCost} 🪵 • wall off chokes`, () => g.startPlacement('wall'), p.logs < CONFIG.wallCost));
+        ap(this.actBtn('wall', 'Wall', 'wall off chokes', () => g.startPlacement('wall'), CONFIG.wallCost));
       } else if (single.type === 'wall') {
         const hint = document.createElement('div');
         hint.className = 'side-hint';
         hint.textContent = 'Wall: cheap, blocks paths. Enemies must chew through. Chain-place more from HQ.';
         this.elBuild.appendChild(hint);
-        ap(this.actBtn('wall', 'More Wall', `${CONFIG.wallCost} 🪵 • keep chaining`, () => g.startPlacement('wall'), p.logs < CONFIG.wallCost));
+        ap(this.actBtn('wall', 'More Wall', 'keep chaining', () => g.startPlacement('wall'), CONFIG.wallCost));
       } else if (single.type === 'turret') {
         const hint = document.createElement('div');
         hint.className = 'side-hint';
@@ -347,8 +390,8 @@ export class HUD {
       if (hq) ap(this.trainBtn(hq, 'worker'));
       const rax = g.buildings.find(b => b.owner === g.humanId && b.type === 'barracks' && !b.dead);
       if (rax) ap(this.trainBtn(rax, 'soldier'));
-      if (hq) ap(this.actBtn('barracks', 'Expand', 'place Barracks / Turret / Wall', () => g.startPlacement('barracks'), p.logs < CONFIG.barracksCost));
-      if (hq && p.logs >= CONFIG.wallCost) ap(this.actBtn('wall', 'Wall', `${CONFIG.wallCost} 🪵 • quick blocker`, () => g.startPlacement('wall')));
+      if (hq) ap(this.actBtn('barracks', 'Expand', 'place Barracks / Turret / Wall', () => g.startPlacement('barracks'), CONFIG.barracksCost));
+      if (hq) ap(this.actBtn('wall', 'Wall', 'quick blocker', () => g.startPlacement('wall'), CONFIG.wallCost));
     }
   }
 
