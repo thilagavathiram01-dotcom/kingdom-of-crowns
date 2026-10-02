@@ -17,11 +17,15 @@ function fakeGame() {
   g.humanId = 'k0';
   g.units = [];
   g.buildings = [];
+  g.selected = [];
   g.obstacles = [];
   g.resources = [];
   g.terrain = null;
   g.waterFx = { trees: [{ x: 40, z: 0 }, { x: -45, z: 12 }] };
   g.colliderVersion = 0;
+  // spatial hash for unit queries (rebuilt each frame)
+  g.gridCell = 6;
+  g.unitGrid = new Map();
   g._resGrid = new Map();
   g._resCell = 8;
   g.hooks = {};
@@ -422,6 +426,83 @@ ok('every fort piece has a slot length',
   ok('building grid rebuild stays cheap', gridMs / 200 < 4, `${(gridMs / 200).toFixed(2)}ms per rebuild`);
   ok('near queries stay cheap', queryMs / 2000 < 0.05, `${(queryMs / 2000).toFixed(4)}ms each`);
   ok('queries still find the wall they look at', hits >= 2000, `hits=${hits}`);
+}
+
+// ---------- 15. rally points stage trained troops without stacking ----------
+{
+  const g = fakeGame();
+  const hq = g.spawnBuilding('hq', 'k0', 0, 0);
+  const rax = g.spawnBuilding('barracks', 'k0', 20, 0);
+  for (const [b, type] of [[hq, 'worker'], [rax, 'soldier']]) {
+    const r = CONFIG.units[type].radius;
+    ok(`${b.type} default rally is free ground`, g.isSpotFree(b.rallyX, b.rallyZ, r), `${b.rallyX},${b.rallyZ}`);
+    ok(`${b.type} default rally is outside its footprint`, !g.buildingBlocks(b, b.rallyX, b.rallyZ, r));
+  }
+  const moved = g.setBuildingRally(rax, rax.x, rax.z, true);
+  ok('a rally click inside the barracks is moved outside', moved.x !== rax.x || moved.z !== rax.z);
+  ok('the normalized rally is free ground', g.isSpotFree(moved.x, moved.z, CONFIG.units.soldier.radius));
+  const trained = [g.completeTraining(rax, 'soldier'), g.completeTraining(rax, 'soldier'), g.completeTraining(rax, 'soldier')];
+  const keys = trained.map(u => `${u.tx.toFixed(3)},${u.tz.toFixed(3)}`);
+  ok('queued troops get different rally destinations', new Set(keys).size === 3, keys.join(' '));
+  ok('staged destinations are free when assigned',
+    trained.every(u => g.isSpotFree(u.tx, u.tz, CONFIG.units.soldier.radius)));
+  for (const u of trained) { u.x = u.tx; u.z = u.tz; }
+  g.resolveOverlaps();
+  let worst = 0, inside = 0;
+  for (let i = 0; i < trained.length; i++) {
+    if (g.buildingBlocks(rax, trained[i].x, trained[i].z, trained[i].radius)) inside++;
+    for (let j = i + 1; j < trained.length; j++) {
+      const a = trained[i], b = trained[j];
+      worst = Math.max(worst, (a.radius + b.radius + 0.1) - Math.hypot(a.x - b.x, a.z - b.z));
+    }
+  }
+  ok('arrived troops stay outside the barracks', inside === 0, `inside=${inside}`);
+  ok('arrived troops do not stack on each other', worst <= 0, `overlap=${worst.toFixed(3)}`);
+}
+
+// ---------- 16. overlap resolver, HQ drop staging, and wall ejection ----------
+{
+  const g = fakeGame();
+  const wall = g.spawnBuilding('wall', 'k0', 0, 0, 0, 4.6);
+  const trapped = g.spawnUnit('soldier', 'k0', 20, 3);
+  trapped.x = 0; trapped.z = 0;
+  g.resolveOverlaps();
+  ok('a unit inside a wall is ejected', !g.buildingBlocks(wall, trapped.x, trapped.z, trapped.radius));
+  ok('ejection keeps one body radius of standoff',
+    g.footprintDist(wall, trapped.x, trapped.z) >= trapped.radius - 0.02);
+  const a = g.spawnUnit('soldier', 'k0', 30, 0);
+  const b = g.spawnUnit('soldier', 'k0', 34, 0);
+  a.x = 30; a.z = 0; b.x = 30; b.z = 0;
+  g.resolveOverlaps();
+  ok('two units on the same point are separated',
+    Math.hypot(a.x - b.x, a.z - b.z) >= a.radius + b.radius + 0.1);
+  const hq = g.spawnBuilding('hq', 'k0', -30, 0);
+  const carrier = g.spawnUnit('worker', 'k0', -20, 0);
+  const drop = g.hqDropSpot(hq, carrier);
+  ok('cargo drop is staged outside the HQ footprint',
+    !g.buildingBlocks(hq, drop.x, drop.z, carrier.radius));
+  ok('cargo drop is free ground', g.isSpotFree(drop.x, drop.z, carrier.radius));
+}
+
+// ---------- 17. demolish and reclaim ----------
+{
+  const g = fakeGame();
+  g.players.k0.logs = 1000;
+  const wall = g.spawnBuilding('wall', 'k0', 0, 0, 0, 4.6);
+  const beforeWall = g.players.k0.logs;
+  ok('a wall can be demolished', g.demolishBuilding(wall) === true);
+  ok('demolished walls leave the building list', !g.buildings.includes(wall));
+  ok('walls refund half their cost', g.players.k0.logs === beforeWall + Math.floor(CONFIG.wallCost * 0.5));
+  ok('a demolished wall no longer blocks', !g.pointBlocked(0, 0, 0.75));
+  const rax = g.spawnBuilding('barracks', 'k0', 20, 0);
+  rax.hp = rax.maxHp / 2;
+  const beforeRax = g.players.k0.logs;
+  ok('a damaged barracks can be demolished', g.demolishBuilding(rax) === true);
+  ok('reclaim scales with remaining HP',
+    g.players.k0.logs === beforeRax + Math.floor(CONFIG.barracksCost * 0.5 * 0.5));
+  const hq = g.spawnBuilding('hq', 'k0', -20, 0);
+  ok('HQ demolition is refused', g.demolishBuilding(hq) === false);
+  ok('a refused HQ demolition keeps the building', g.buildings.includes(hq));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

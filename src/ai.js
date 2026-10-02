@@ -398,12 +398,14 @@ export class KingdomBrain {
       for (const u of home) {
         if (u.hp / u.maxHp < 0.28 && !u.retreating) {
           u.retreating = true; u.target = null;
-          u.tx = hq.x + (Math.random() - 0.5) * 6; u.tz = hq.z + (Math.random() - 0.5) * 6;
+          const drop = g.hqDropSpot(hq, u);
+          u.tx = drop.x; u.tz = drop.z;
           u.hasOrder = true; u.attackMove = false;
         } else if (u.retreating && u.hp / u.maxHp > 0.75) u.retreating = false;
         // idle army musters at the gate instead of wandering
         else if (!u.retreating && !u.target && !u.hasOrder && Math.hypot(u.x - stage.x, u.z - stage.z) > 16) {
-          u.tx = stage.x + (Math.random() - 0.5) * 10; u.tz = stage.z + (Math.random() - 0.5) * 10;
+          const spot = g.rallySpotFor({ rallyX: stage.x, rallyZ: stage.z }, u.type, u.id % 8);
+          u.tx = spot.x; u.tz = spot.z;
           u.hasOrder = true; u.attackMove = true; u.path = null; u.fireAnchor = null;
         }
       }
@@ -418,7 +420,7 @@ export class KingdomBrain {
         // idle full-loop: if carrying logs but no order, send home, else chop
         if (w.carrying > 0 && !w.returning) {
           const hq2 = g.hqOf(this.owner);
-          if (hq2) { w.returning = true; w.tx = hq2.x; w.tz = hq2.z; w.hasOrder = true; w.path = null; }
+          if (hq2) { const drop = g.hqDropSpot(hq2, w); w.returning = true; w.dropX = drop.x; w.dropZ = drop.z; w.dropFor = hq2.id; w.tx = drop.x; w.tz = drop.z; w.hasOrder = true; w.path = null; }
         }
       }
     }
@@ -426,8 +428,8 @@ export class KingdomBrain {
     // ---- 3. EMPIRE: utility-based spending over every building/unit type ----
     this.spend(S, threat);
 
-    // barracks rally = the gate muster point
-    for (const b of S.rax) { b.rallyX = stage.x + (Math.random() - 0.5) * 8; b.rallyZ = stage.z + (Math.random() - 0.5) * 8; }
+    // barracks rally = the gate muster point, normalized to free ground
+    for (const b of S.rax) g.setBuildingRally(b, stage.x, stage.z, true);
 
     // ---- 4. WAR ----
     if (this.wave) this.runWave(S);

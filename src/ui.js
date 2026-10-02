@@ -355,13 +355,25 @@ export class HUD {
 
     const single = sel.length === 1 ? sel[0] : null;
     if (single && single.kind === 'building' && single.owner === g.humanId && !single.dead) {
+      const rallyHint = document.createElement('div');
+      rallyHint.className = 'side-hint';
+      rallyHint.textContent = 'Tap open ground to set rally — new units gather there';
+      const demolish = () => {
+        const refund = Math.floor(g.buildingCost(single.type) * (CONFIG.demolishRefund ?? 0.5));
+        return this.actBtn('x', 'Demolish', refund > 0 ? `remove and reclaim ${refund} logs` : 'remove this structure', () => {
+          if (g.demolishBuilding(single)) this.onSelect(g.selected);
+        });
+      };
       if (single.type === 'hq') {
+        this.elBuild.appendChild(rallyHint);
         ap(this.trainBtn(single, 'worker'));
         ap(this.actBtn('barracks', 'Barracks', '+supply, unlocks army', () => g.startPlacement('barracks'), CONFIG.barracksCost));
         ap(this.actBtn('turret', 'Turret', 'auto-defense', () => g.startPlacement('turret'), CONFIG.turretCost));
         ap(this.actBtn('wall', 'Wall', 'chain-place blocker', () => g.startPlacement('wall'), CONFIG.wallCost));
       } else if (single.type === 'barracks') {
+        this.elBuild.appendChild(rallyHint);
         for (const t of ['soldier', 'brute', 'hunter', 'scout', 'tank', 'artillery']) ap(this.trainBtn(single, t));
+        ap(demolish());
         ap(this.actBtn('wall', 'Wall', 'wall off chokes', () => g.startPlacement('wall'), CONFIG.wallCost));
       } else if (single.type === 'wall') {
         const hint = document.createElement('div');
@@ -369,11 +381,13 @@ export class HUD {
         hint.textContent = 'Wall: cheap, blocks paths. Enemies must chew through. Chain-place more from HQ.';
         this.elBuild.appendChild(hint);
         ap(this.actBtn('wall', 'More Wall', 'keep chaining', () => g.startPlacement('wall'), CONFIG.wallCost));
+        ap(demolish());
       } else if (single.type === 'turret') {
         const hint = document.createElement('div');
         hint.className = 'side-hint';
         hint.textContent = 'Auto-defends this area. Select army to push with it.';
         this.elBuild.appendChild(hint);
+        ap(demolish());
       }
       return;
     }

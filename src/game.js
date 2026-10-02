@@ -580,8 +580,9 @@ export class Game {
         // and pathing use the box, so long walls block like real fortifications.
         hw: L * 0.5, hd: T * 0.5, rotC: Math.cos(rot), rotS: Math.sin(rot),
         radius: Math.hypot(L * 0.5, T * 0.5), // bounding radius for broad phase
-        queue: [], rallyX: x + 5, rallyZ: z + 5, dead: false,
+        queue: [], dead: false,
       };
+      this.resetRally(b);
       this.buildings.push(b);
       this.colliderVersion++;
       return b;
@@ -611,8 +612,9 @@ export class Game {
     const b = {
       id: UID++, kind: 'building', type, owner, mesh: g, ring, bar, head,
       x, z, hp: st.hp, maxHp: st.hp, size: s, radius: s * 0.72,
-      queue: [], progress: 0, rallyX: x + 5, rallyZ: z + 5, dead: false, cd: 0,
+      queue: [], progress: 0, dead: false, cd: 0,
     };
+    this.resetRally(b);
     this.buildings.push(b);
     this.colliderVersion++;
     return b;
@@ -649,8 +651,9 @@ export class Game {
     const b = {
       id: UID++, kind: 'building', type, owner, mesh: g, ring, bar, flag,
       x, z, hp: st.hp, maxHp: st.hp, size: s, radius: s * 0.72,
-      queue: [], progress: 0, buildTime: 0, rallyX: x + 5, rallyZ: z + 5, dead: false,
+      queue: [], progress: 0, buildTime: 0, dead: false,
     };
+    this.resetRally(b);
     this.buildings.push(b);
     this.colliderVersion++;
     return b;
@@ -1152,8 +1155,7 @@ export class Game {
     const units = this.selected.filter(s => s.kind === 'unit' && !s.dead);
     const blds = this.selected.filter(s => s.kind === 'building' && !s.dead);
     if (blds.length && !units.length) {
-      for (const b of blds) { b.rallyX = THREE.MathUtils.clamp(p.x, -this.mapBound(4), this.mapBound(4)); b.rallyZ = THREE.MathUtils.clamp(p.z, -this.mapBound(4), this.mapBound(4)); this.showRally(b); }
-      this.hookMsg('Rally point set — new units will gather there');
+      for (const b of blds) this.setBuildingRally(b, p.x, p.z);
       this.hooks.onSelect?.(this.selected);
       return;
     }
@@ -1249,7 +1251,9 @@ export class Game {
 
   orderReturn(workers, hq) {
     for (const u of workers) {
-      u.tx = hq.x; u.tz = hq.z; u.target = null; u.objective = null; u.harvestTarget = null;
+      const drop = this.hqDropSpot(hq, u);
+      u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id;
+      u.tx = drop.x; u.tz = drop.z; u.target = null; u.objective = null; u.harvestTarget = null;
       u.gathering = 0; u.hasOrder = true; u.returning = true; u.idleT = 0; u.path = null; u.fireAnchor = null;
     }
     this.spawnPing(hq.x, hq.z, 0x4ade80);
@@ -1282,6 +1286,89 @@ export class Game {
     this.scene.add(b.rallyLine);
     clearTimeout(b._rallyT);
     b._rallyT = setTimeout(() => { if (b.rallyLine) { this.scene.remove(b.rallyLine); b.rallyLine = null; } }, 2500);
+  }
+
+  // ---------- rally + staging ----------
+  // Rally points must be real destinations. Defaults and clicks are normalized
+  // to free ground, and trained units spread around the rally in a ring so a
+  // queue does not spawn five soldiers inside each other.
+  defaultRallyPoint(x, z, extent = 4) {
+    const H = this.mapBound(4);
+    const clear = CONFIG.rallyClearance ?? 1.0;
+    const start = Math.max(2.2, extent + clear + 0.6);
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+    for (const [dx, dz] of dirs) {
+      for (let ring = 0; ring < 6; ring++) {
+        const nx = THREE.MathUtils.clamp(x + dx * (start + ring * 1.4), -H, H);
+        const nz = THREE.MathUtils.clamp(z + dz * (start + ring * 1.4), -H, H);
+        if (this.isSpotFree(nx, nz, clear)) return { x: nx, z: nz };
+      }
+    }
+    return this.findFreeSpot(x, z, clear);
+  }
+
+  resetRally(b) {
+    const extent = b.hw === undefined ? b.radius : Math.max(b.hw, b.hd);
+    const spot = this.defaultRallyPoint(b.x, b.z, extent);
+    b.rallyX = spot.x; b.rallyZ = spot.z;
+    return spot;
+  }
+
+  setBuildingRally(b, x, z, quiet = false) {
+    const H = this.mapBound(4);
+    const clear = CONFIG.rallyClearance ?? 1.0;
+    const want = {
+      x: THREE.MathUtils.clamp(x, -H, H),
+      z: THREE.MathUtils.clamp(z, -H, H),
+    };
+    const spot = this.isSpotFree(want.x, want.z, clear)
+      ? want
+      : this.findFreeSpot(want.x, want.z, clear);
+    b.rallyX = spot.x; b.rallyZ = spot.z;
+    this.showRally(b);
+    if (!quiet && b.owner === this.humanId) this.hookMsg('Rally point set — new units will gather there');
+    return spot;
+  }
+
+  completeTraining(b, type) {
+    const a = b.type === 'hq' ? Math.PI : 0;
+    const u = this.spawnUnit(type, b.owner, b.x + Math.cos(a) * (b.size), b.z + Math.sin(a) * (b.size));
+    const slot = (b._rallySeq = (b._rallySeq || 0) + 1);
+    const dest = this.rallySpotFor(b, type, slot);
+    u.tx = dest.x; u.tz = dest.z; u.hasOrder = true; u.path = null;
+    return u;
+  }
+
+  rallySpotFor(b, type, slot = 0) {
+    const st = CONFIG.units[type] || { radius: 0.75 };
+    const clear = st.radius + 0.25;
+    const step = CONFIG.stagingStep ?? 1.7;
+    const bx = b.rallyX ?? b.x, bz = b.rallyZ ?? b.z;
+    if (slot <= 0 && this.isSpotFree(bx, bz, clear)) return { x: bx, z: bz };
+    // Queued troops need different staging points. Spiral outward from the rally
+    // so the fifth soldier does not aim at the same square metre as the first.
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const a = slot * 2.399963 + attempt * 0.55;
+      const r = step * (1 + attempt * 0.18);
+      const nx = THREE.MathUtils.clamp(bx + Math.cos(a) * r, -this.mapBound(4), this.mapBound(4));
+      const nz = THREE.MathUtils.clamp(bz + Math.sin(a) * r, -this.mapBound(4), this.mapBound(4));
+      if (this.isSpotFree(nx, nz, clear)) return { x: nx, z: nz };
+    }
+    for (let ring = 1; ring <= 8; ring++) {
+      const steps = 6 + ring * 4;
+      for (let i = 0; i < steps; i++) {
+        const a = slot * 2.399963 + (i / steps) * Math.PI * 2;
+        const nx = THREE.MathUtils.clamp(bx + Math.cos(a) * ring * step, -this.mapBound(4), this.mapBound(4));
+        const nz = THREE.MathUtils.clamp(bz + Math.sin(a) * ring * step, -this.mapBound(4), this.mapBound(4));
+        if (this.isSpotFree(nx, nz, clear)) return { x: nx, z: nz };
+      }
+    }
+    return this.findFreeSpot(bx, bz, clear);
+  }
+
+  hqDropSpot(hq, u) {
+    const slot = (hq._dropSeq = (hq._dropSeq || 0) + 1);
+    return this.rallySpotFor({ rallyX: hq.x + hq.radius + 1.4, rallyZ: hq.z }, u?.type || 'worker', slot);
   }
 
   // ---------- colliders / free space ----------
@@ -1476,7 +1563,7 @@ export class Game {
     if (pl.type === 'turret') b = this.buildTurret(this.humanId, pl.x, pl.z);
     else if (pl.type === 'wall') b = this.buildWall(this.humanId, pl.x, pl.z, pl.rot);
     else b = this.buildBarracks(this.humanId, pl.x, pl.z);
-    if (b) { b.rallyX = pl.x + 5; b.rallyZ = pl.z + 5; }
+    if (b) this.resetRally(b);
     // walls chain: keep ghost alive so players can drag a wall line quickly
     if (pl.type === 'wall') {
       if (this.players[this.humanId].logs < CONFIG.wallCost) { this.cancelPlacement(); return; }
@@ -1532,7 +1619,7 @@ export class Game {
     this.camTarget.set(s.x, 0, s.z);
   }
   stopSelected() {
-    for (const u of this.selected) if (u.kind === 'unit' && !u.dead) { u.hasOrder = false; u.attackMove = false; u.target = null; u.objective = null; u.harvestTarget = null; u.returning = false; u.idleT = 0; u.path = null; u.tx = u.x; u.tz = u.z; u.holdPosition = true; u.fireAnchor = null; }
+    for (const u of this.selected) if (u.kind === 'unit' && !u.dead) { u.hasOrder = false; u.attackMove = false; u.target = null; u.objective = null; u.harvestTarget = null; u.returning = false; u.dropX = null; u.dropZ = null; u.dropFor = null; u.idleT = 0; u.path = null; u.tx = u.x; u.tz = u.z; u.holdPosition = true; u.fireAnchor = null; }
     this.hookMsg('Holding position');
   }
 
@@ -1610,6 +1697,45 @@ export class Game {
       m += b.type === 'hq' ? CONFIG.supplyPerHQ : b.type === 'barracks' ? CONFIG.supplyPerBarracks : 0;
     }
     return m;
+  }
+
+  buildingCost(type) {
+    return {
+      barracks: CONFIG.barracksCost,
+      turret: CONFIG.turretCost,
+      wall: CONFIG.wallCost,
+      hq: 0,
+    }[type] ?? 0;
+  }
+
+  demolishBuilding(b, { refund = true } = {}) {
+    if (!b || b.dead || b.kind !== 'building') return false;
+    // HQ demolition would end the saga by accident; it stays off the button.
+    if (b.type === 'hq') {
+      if (b.owner === this.humanId) this.hookMsg('HQ cannot be demolished');
+      return false;
+    }
+    const rate = CONFIG.demolishRefund ?? 0.5;
+    const refundLogs = refund
+      ? Math.floor(this.buildingCost(b.type) * rate * Math.max(0, b.hp / b.maxHp))
+      : 0;
+    b.queue = []; b.progress = 0; b.dead = true;
+    if (b.rallyLine) { this.scene.remove(b.rallyLine); b.rallyLine = null; }
+    if (b._rallyT) { clearTimeout(b._rallyT); b._rallyT = null; }
+    if (b.mesh) this.scene.remove(b.mesh);
+    const i = this.buildings.indexOf(b);
+    if (i >= 0) this.buildings.splice(i, 1);
+    this.colliderVersion++;
+    this.pathCache?.clear();
+    this.selected = this.selected.filter(s => s !== b);
+    if (refundLogs > 0) this.players[b.owner].logs += refundLogs;
+    if (b.owner === this.humanId) {
+      this.hookMsg(refundLogs > 0
+        ? `${cap(b.type)} demolished — reclaimed ${refundLogs} logs`
+        : `${cap(b.type)} demolished`);
+      this.hooks.onSelect?.(this.selected);
+    }
+    return true;
   }
 
   hookMsg(t) { this.hooks.onMessage?.(t); }
@@ -1919,9 +2045,7 @@ export class Game {
       b.progress = cur.t;
       if (cur.t <= 0) {
         b.queue.shift();
-        const a = b.type === 'hq' ? Math.PI : 0;
-        const u = this.spawnUnit(cur.type, b.owner, b.x + Math.cos(a) * (b.size), b.z + Math.sin(a) * (b.size));
-        u.tx = b.rallyX; u.tz = b.rallyZ; u.hasOrder = true;
+        this.completeTraining(b, cur.type);
         if (b.owner === this.humanId && this.selected.includes(b)) this.hooks.onSelect?.(this.selected);
       }
     }
@@ -2118,7 +2242,7 @@ export class Game {
           this.syncTree(n);
           u.harvestTarget = this.nearestResource(u.x, u.z);
         }
-        if (u.carrying >= CARRY) { const hq = this.hqOf(u.owner); if (hq) { u.returning = true; u.tx = hq.x; u.tz = hq.z; u.path = null; } }
+        if (u.carrying >= CARRY) { const hq = this.hqOf(u.owner); if (hq) { const drop = this.hqDropSpot(hq, u); u.returning = true; u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id; u.tx = drop.x; u.tz = drop.z; u.path = null; } }
       }
       return;
     }
@@ -2126,7 +2250,11 @@ export class Game {
     if (u.type === 'worker' && u.carrying > 0 && (u.returning || (!this.resourceReady(u.harvestTarget)))) {
       const hq = this.hqOf(u.owner);
       if (!hq) return;
-      if (Math.hypot(hq.x - u.x, hq.z - u.z) > hq.radius + 0.9) { this.navigate(u, hq.x, hq.z, dt, hq.radius + 0.9, 3.0); return; }
+      if (u.dropFor !== hq.id) {
+        const drop = this.hqDropSpot(hq, u);
+        u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id; u.path = null;
+      }
+      if (Math.hypot(hq.x - u.x, hq.z - u.z) > hq.radius + 0.9) { this.navigate(u, u.dropX, u.dropZ, dt, 0.8, 3.0); return; }
       u.path = null;
       this.players[u.owner].logs += u.carrying;
       u.carrying = 0; u.returning = false;
@@ -2247,6 +2375,54 @@ export class Game {
         b.x += 0.15; b.z += 0.1;
       }
     };
+    // Eject units from building footprints first, then relax unit pairs. The
+    // final pair pass matters: a wall ejection can otherwise shove a unit
+    // directly onto its neighbor and leave the overlap in place.
+    for (const u of this.units) {
+      if (u.dead) continue;
+      // anchored firing units stay planted; skip building-push for them too
+      if (!u.fireAnchor) {
+        // spatial-hash query: forts hold hundreds of wall pieces, a full scan
+        // here used to cost units x buildings every frame
+        this.eachBuildingNear(u.x, u.z, 7, (b) => {
+          if (!this.buildingBlocks(b, u.x, u.z, u.radius)) return;
+          const dx = u.x - b.x, dz = u.z - b.z;
+          if (b.hw !== undefined) {
+            // long wall: move to the closest face plus one body radius. The
+            // old code used only the push direction, which could park a unit
+            // back inside the wall or beside another unit.
+            const lx = dx * b.rotC + dz * b.rotS, lz = -dx * b.rotS + dz * b.rotC;
+            const ex = b.hw + u.radius, ez = b.hd + u.radius;
+            const ox = Math.max(-ex, Math.min(ex, lx));
+            const oz = Math.max(-ez, Math.min(ez, lz));
+            const px = lx - ox, pz = lz - oz;
+            const d = Math.hypot(px, pz);
+            let qx, qz;
+            if (d > 0.0001) {
+              qx = ox + (px / d) * u.radius;
+              qz = oz + (pz / d) * u.radius;
+            } else if ((ex - Math.abs(lx)) < (ez - Math.abs(lz))) {
+              qx = lx >= 0 ? ex : -ex;
+              qz = Math.max(-ez, Math.min(ez, lz));
+            } else {
+              qx = Math.max(-ex, Math.min(ex, lx));
+              qz = lz >= 0 ? ez : -ez;
+            }
+            u.x = b.x + (qx * b.rotC - qz * b.rotS);
+            u.z = b.z + (qx * b.rotS + qz * b.rotC);
+            return;
+          }
+          const rr = b.radius + u.radius;
+          // cheap reject before sqrt
+          if (Math.abs(dx) > rr || Math.abs(dz) > rr) return;
+          const d = Math.hypot(dx, dz);
+          if (d < rr && d > 0.0001) { u.x = b.x + (dx / d) * rr; u.z = b.z + (dz / d) * rr; }
+          else if (d <= 0.0001) { u.x = b.x + rr; }
+        });
+      }
+      u.x = THREE.MathUtils.clamp(u.x, -H, H);
+      u.z = THREE.MathUtils.clamp(u.z, -H, H);
+    }
     // rebuild grid from current positions, then relax (single rebuild:
     // positions only move a few cm per frame, so one pass is enough)
     this.rebuildGrid();
@@ -2265,40 +2441,6 @@ export class Game {
           });
         }
       }
-    }
-    for (const u of this.units) {
-      if (u.dead) continue;
-      // anchored firing units stay planted; skip building-push for them too
-      if (!u.fireAnchor) {
-        // spatial-hash query: forts hold hundreds of wall pieces, a full scan
-        // here used to cost units x buildings every frame
-        this.eachBuildingNear(u.x, u.z, 7, (b) => {
-          const dx = u.x - b.x, dz = u.z - b.z;
-          if (b.hw !== undefined) {
-            // long wall: shove out of the box along the shortest local face
-            const lx = dx * b.rotC + dz * b.rotS, lz = -dx * b.rotS + dz * b.rotC;
-            const ex = b.hw + u.radius, ez = b.hd + u.radius;
-            const ox = Math.max(-ex, Math.min(ex, lx));
-            const oz = Math.max(-ez, Math.min(ez, lz));
-            let px = lx - ox, pz = lz - oz;
-            let d = Math.hypot(px, pz);
-            if (d > 0.0001) { px /= d; pz /= d; }
-            else if (Math.abs(lx) / ex > Math.abs(lz) / ez) { px = Math.sign(lx) || 1; pz = 0; }
-            else { px = 0; pz = Math.sign(lz) || 1; }
-            u.x = b.x + (px * b.rotC - pz * b.rotS);
-            u.z = b.z + (px * b.rotS + pz * b.rotC);
-            return;
-          }
-          const rr = b.radius + u.radius;
-          // cheap reject before sqrt
-          if (Math.abs(dx) > rr || Math.abs(dz) > rr) return;
-          const d = Math.hypot(dx, dz);
-          if (d < rr && d > 0.0001) { u.x = b.x + (dx / d) * rr; u.z = b.z + (dz / d) * rr; }
-          else if (d <= 0.0001) { u.x = b.x + rr; }
-        });
-      }
-      u.x = THREE.MathUtils.clamp(u.x, -H, H);
-      u.z = THREE.MathUtils.clamp(u.z, -H, H);
     }
   }
 

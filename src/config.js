@@ -15,6 +15,9 @@ export const CONFIG = {
   barracksCost: 150,
   turretCost: 120,
   wallCost: 5,                // cheap blocker: walls are the game's bread & butter
+  rallyClearance: 1.0,        // rally/staging searches keep this breathing room
+  stagingStep: 1.7,           // rally-ring spacing so trained units do not stack
+  demolishRefund: 0.5,        // demolish returns this fraction of the build cost
   supplyPerHQ: 26,
   supplyPerBarracks: 8,
   supplyPerTurret: 0,
