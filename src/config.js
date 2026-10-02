@@ -60,13 +60,9 @@ export const CONFIG = {
   },
 
   resource: {
-    treeAmount: [260, 460],   // logs per harvestable tree
+    treeAmount: [60, 120],    // logs per terrain tree (workers visibly work through them)
     regrowTime: [55, 115],    // seconds a chopped tree needs to grow back
     carryMax: 10,             // logs a worker hauls per trip
-    maxNodes: 260,            // cap on harvestable trees (perf + endless supply)
-    grovesPerBase: 2,         // tree clusters planted near each HQ
-    treesPerGrove: 4,
-    wildGroves: 22,           // contested forest claims out in the wilds
   },
 };
 

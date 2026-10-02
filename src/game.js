@@ -4,6 +4,9 @@ import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite }
 import { createWorkerRig, updateWorkerRig as animateWorkerRig } from './workers3d.js';
 
 let UID = 1;
+// scratch matrices for harvest scaling (no per-chop allocation)
+const _sv = new THREE.Matrix4();
+const _tm = new THREE.Matrix4();
 
 export class Game {
   constructor(canvas, hooks, assets = {}) {
@@ -330,25 +333,11 @@ export class Game {
       this.spawnUnit('scout', id, s.x + 5, s.z + 8);
     });
 
-    // harvestable forests: groves near every base + contested wild claims.
-    // Workers chop LOGS from these trees (no crystals). Chopped trees shrink
-    // to a stump and grow back after a while, so timber never runs out.
-    const RC = CONFIG.resource;
-    this.kingdomIds().forEach((id, i) => {
-      const s = this.kingdomSpawns[i];
-      for (let k = 0; k < (RC.grovesPerBase ?? 2); k++) {
-        const cx = s.x + (Math.random() - 0.5) * 22;
-        const cz = s.z + 10 + (Math.random() - 0.5) * 12;
-        for (let j = 0; j < (RC.treesPerGrove ?? 4); j++) this.spawnResource(cx + (Math.random() - 0.5) * 8, cz + (Math.random() - 0.5) * 8);
-      }
-    });
-    for (let f = 0; f < (RC.wildGroves ?? 22); f++) {
-      const cx = (Math.random() - 0.5) * (CONFIG.mapSize - 60);
-      const cz = (Math.random() - 0.5) * (CONFIG.mapSize - 60);
-      const n = 3 + Math.floor(Math.random() * 3);
-      for (let j = 0; j < n; j++) this.spawnResource(cx + (Math.random() - 0.5) * 10, cz + (Math.random() - 0.5) * 10);
-    }
-    this.forestT = 20;
+    // timber economy: EVERY terrain tree is harvestable. Workers seek the
+    // nearest standing tree anywhere on the continent and chop logs from it.
+    // Nothing is planted near bases; chopped trees shrink to stumps and grow
+    // back, so logs never run out. (No crystals anywhere.)
+    this.buildForestResources(this.waterFx?.trees || []);
 
     this.hookMsg(`War of Crowns — ${CONFIG.kingdoms} kingdoms, a ~1 hour saga. Rise in peace, then dominate them all!`);
     this.updateFog();
@@ -540,67 +529,104 @@ export class Game {
   }
 
   // shared tree geometry/materials (hundreds of harvestable trees)
-  treeAssets() {
-    if (!this._treeTrunkGeo) {
-      this._treeTrunkGeo = new THREE.CylinderGeometry(0.32, 0.48, 2.4, 7);
-      this._treeTrunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 1 });
-      this._treePineGeo = new THREE.ConeGeometry(1.8, 3.8, 7);
-      this._treeLeafGeo = new THREE.IcosahedronGeometry(1.7, 0);
-      this._treePineMat = new THREE.MeshStandardMaterial({ color: 0x1f6b3a, roughness: 1 });
-      this._treeLeafMat = new THREE.MeshStandardMaterial({ color: 0x3f9142, roughness: 1 });
-      this._treeStumpGeo = new THREE.CylinderGeometry(0.45, 0.55, 0.7, 7);
-      this._treeStumpMat = new THREE.MeshStandardMaterial({ color: 0x4e3319, roughness: 1 });
-    }
-    return this;
-  }
-
-  // a harvestable tree = trunk + canopy. Chopping shrinks the canopy;
-  // at 0 it becomes a stump and regrows after CONFIG.resource.regrowTime.
-  spawnResource(x, z) {
-    if (this.terrain && this.terrain.blocked(x, z)) {
-      const f = this.findFreeSpot(x, z, 1.4);
-      x = f.x; z = f.z;
-      if (this.terrain.blocked(x, z)) return null;
-    }
-    this.treeAssets();
+  // ---- harvestable terrain forest -------------------------------------
+  // Workers chop the REAL terrain trees (no planted groves, no crystals).
+  // Each resource is a logical entry bound to a terrain instance: chopping
+  // shrinks that instance, at 0 it hides + leaves a stump, and it regrows
+  // after CONFIG.resource.regrowTime so timber never runs out.
+  buildForestResources(spots) {
     const [lo, hi] = CONFIG.resource?.treeAmount ?? [260, 460];
-    const amt = lo + Math.random() * (hi - lo);
-    const my = this.gy(x, z);
-    if (my < CONFIG.terrain.waterLevel + 0.4) return null; // don't spawn in the river
-    const g = new THREE.Group();
-    const s = 0.85 + Math.random() * 0.5;
-    const trunk = new THREE.Mesh(this._treeTrunkGeo, this._treeTrunkMat);
-    trunk.position.y = 1.2 * s;
-    trunk.scale.setScalar(s);
-    const isPine = Math.random() < 0.65;
-    const top = new THREE.Mesh(isPine ? this._treePineGeo : this._treeLeafGeo, isPine ? this._treePineMat : this._treeLeafMat);
-    top.position.y = (isPine ? 4.0 : 3.6) * s;
-    top.scale.setScalar(s);
-    top.castShadow = true;
-    const stump = new THREE.Mesh(this._treeStumpGeo, this._treeStumpMat);
-    stump.position.y = 0.35;
-    stump.visible = false;
-    g.add(trunk, top, stump);
-    g.position.set(x, my, z);
-    g.rotation.y = Math.random() * Math.PI * 2;
-    this.scene.add(g);
-    const r = { id: UID++, kind: 'resource', rtype: 'tree', mesh: g, trunk, top, stump,
-      x, z, amount: amt, max: amt, radius: 1.4, dead: false, depleted: false,
-      regrowT: 0, baseS: s, phase: Math.random() * Math.PI * 2 };
-    this.resources.push(r);
-    return r;
+    // one shared stump field: a stump instance appears only while its tree is down
+    const stumpGeo = new THREE.CylinderGeometry(0.45, 0.55, 0.7, 7);
+    const stumpMat = new THREE.MeshStandardMaterial({ color: 0x4e3319, roughness: 1 });
+    const stumps = new THREE.InstancedMesh(stumpGeo, stumpMat, Math.max(1, spots.length));
+    {
+      const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+      for (let i = 0; i < spots.length; i++) stumps.setMatrixAt(i, zero);
+      stumps.instanceMatrix.needsUpdate = true;
+    }
+    stumps.castShadow = true;
+    this.scene.add(stumps);
+    this.stumpMesh = stumps;
+    // instanceId -> resource, per tree mesh, for tap-to-chop picking
+    this.treePick = [];
+    const byMesh = new Map();
+    spots.forEach((sp, i) => {
+      const amt = lo + Math.random() * (hi - lo);
+      const r = { id: UID++, kind: 'resource', rtype: 'tree',
+        x: sp.x, z: sp.z, amount: amt, max: amt, radius: 1.4,
+        dead: false, depleted: false, regrowT: 0, stumpIdx: i, spot: sp };
+      this.resources.push(r);
+      for (const mesh of [sp.trunkMesh, sp.topMesh]) {
+        let m = byMesh.get(mesh);
+        if (!m) { m = new Map(); byMesh.set(mesh, m); }
+        m.set(sp.idx, r);
+      }
+    });
+    for (const [mesh, map] of byMesh) {
+      mesh.userData.treeRes = map;
+      this.treePick.push(mesh);
+    }
+    // static position grid: tree spots never move (built once, queried often)
+    this._resGrid = new Map(); this._resCell = 8;
+    const H = CONFIG.mapSize / 2;
+    this.resources.forEach((r, i) => {
+      const k = Math.floor((r.x + H) / 8) * 1000 + Math.floor((r.z + H) / 8);
+      let a = this._resGrid.get(k);
+      if (!a) { a = []; this._resGrid.set(k, a); }
+      a.push(i);
+    });
   }
 
-  // keep the canopy in sync with remaining logs (continuous visual feedback)
-  syncTree(r) {
-    const frac = Math.max(0, r.amount / r.max);
-    const s = r.baseS * (0.3 + 0.7 * frac);
-    if (r.top) {
-      r.top.visible = frac > 0;
-      r.top.scale.setScalar(Math.max(0.05, s));
+  eachResourceNear(x, z, r, cb) {
+    const H = CONFIG.mapSize / 2, c = this._resCell || 8;
+    const ix0 = Math.floor((x - r + H) / c), ix1 = Math.floor((x + r + H) / c);
+    const iz0 = Math.floor((z - r + H) / c), iz1 = Math.floor((z + r + H) / c);
+    for (let ix = ix0; ix <= ix1; ix++) {
+      for (let iz = iz0; iz <= iz1; iz++) {
+        const a = this._resGrid.get(ix * 1000 + iz);
+        if (!a) continue;
+        for (const i of a) {
+          const res = this.resources[i];
+          if (res && cb(res) === false) return;
+        }
+      }
     }
-    if (r.stump) r.stump.visible = frac <= 0;
-    if (r.trunk) r.trunk.visible = frac > 0;
+  }
+
+  // rescale the bound terrain instances to match remaining logs
+  syncTree(r) {
+    const sp = r.spot;
+    if (!sp) return;
+    const frac = Math.max(0, r.amount / r.max);
+    const f = frac <= 0 ? 0 : 0.3 + 0.7 * frac;
+    _sv.makeScale(f, f, f);
+    _tm.copy(sp.trunkMat).multiply(_sv);
+    sp.trunkMesh.setMatrixAt(sp.idx, _tm);
+    _tm.copy(sp.topMat).multiply(_sv);
+    sp.topMesh.setMatrixAt(sp.idx, _tm);
+    if (this.stumpMesh) {
+      if (frac <= 0) {
+        _tm.makeTranslation(r.x, this.gy(r.x, r.z) + 0.35, r.z);
+        this.stumpMesh.setMatrixAt(r.stumpIdx, _tm);
+      } else {
+        _tm.makeScale(0, 0, 0);
+        this.stumpMesh.setMatrixAt(r.stumpIdx, _tm);
+      }
+    }
+    this._treeDirty = true;
+  }
+
+  flushTreeMatrices() {
+    if (!this._treeDirty) return;
+    this._treeDirty = false;
+    const seen = new Set();
+    for (const r of this.resources) {
+      if (!r.spot) continue;
+      if (!seen.has(r.spot.trunkMesh)) { seen.add(r.spot.trunkMesh); r.spot.trunkMesh.instanceMatrix.needsUpdate = true; }
+      if (!seen.has(r.spot.topMesh)) { seen.add(r.spot.topMesh); r.spot.topMesh.instanceMatrix.needsUpdate = true; }
+    }
+    if (this.stumpMesh) this.stumpMesh.instanceMatrix.needsUpdate = true;
   }
 
   resourceReady(r) {
@@ -615,28 +641,11 @@ export class Game {
       if (r.regrowT <= 0) {
         r.amount = r.max;
         r.depleted = false;
-        r.mesh.visible = true;
         this.syncTree(r);
         this.burst(r.x, this.gy(r.x, r.z) + 2, r.z, 0x4ade80, 8, 3);
       }
     }
-    // endless timber: seed a fresh wild tree now and then (up to cap)
-    this.forestT = (this.forestT ?? 20) - dt;
-    if (this.forestT <= 0) {
-      this.forestT = 25;
-      const active = this.resources.filter(rr => !rr.dead && !rr.depleted).length;
-      const cap = CONFIG.resource?.maxNodes ?? 260;
-      if (active < cap) {
-        for (let tries = 0; tries < 8; tries++) {
-          const x = (Math.random() - 0.5) * (CONFIG.mapSize - 60);
-          const z = (Math.random() - 0.5) * (CONFIG.mapSize - 60);
-          const before = this.resources.length;
-          const t = this.spawnResource(x, z);
-          if (t) break;
-          if (this.resources.length > before) break;
-        }
-      }
-    }
+    // timber is endless through regrowth: nothing is ever spawned or removed
   }
 
   spawnProjectile(from, to, color, damage, target, splash = 0, owner = 'k0') {
@@ -891,9 +900,17 @@ export class Game {
     // hidden (fogged) enemies can't be clicked
     for (const u of this.units) if (!u.dead && u.mesh.visible) { u.mesh.updateMatrixWorld(); meshes.push(u.mesh); }
     for (const b of this.buildings) if (!b.dead && b.mesh.visible) { b.mesh.updateMatrixWorld(); meshes.push(b.mesh); }
-    for (const r of this.resources) if (this.resourceReady(r) && r.mesh.visible) { r.mesh.updateMatrixWorld(); meshes.push(r.mesh); }
+    // terrain trees are instanced: raycast the canopies/trunks, map instanceId -> tree
+    for (const tm of this.treePick || []) { tm.updateMatrixWorld(); meshes.push(tm); }
     const hits = this.ray.intersectObjects(meshes, true);
     for (const h of hits) {
+      // chopped-tree tap: instanced hit carries its resource directly
+      const tmap = h.object.userData?.treeRes;
+      if (tmap && h.instanceId !== undefined) {
+        const res = tmap.get(h.instanceId);
+        if (this.resourceReady(res)) return res;
+        continue;
+      }
       let o = h.object;
       while (o && !o.userData.ref) o = o.parent;
       // fallback: find by traversal
@@ -911,7 +928,7 @@ export class Game {
     while (o) {
       for (const u of this.units) if (u.mesh === o) return u;
       for (const b of this.buildings) if (b.mesh === o) return b;
-      for (const r of this.resources) if (r.mesh === o) return r;
+      for (const r of this.resources) if (r.mesh && r.mesh === o) return r;
       o = o.parent;
     }
     return null;
@@ -1158,10 +1175,12 @@ export class Game {
     for (const o of this.obstacles) {
       if (Math.hypot(x - o.x, z - o.z) < o.r + radius) return false;
     }
-    for (const r of this.resources) {
-      if (!this.resourceReady(r)) continue;
-      if (Math.hypot(x - r.x, z - r.z) < r.radius + 0.2 + radius) return false;
-    }
+    // standing harvestable trees block placement (grid query: ~1000 trees)
+    this.eachResourceNear(x, z, radius + 2.5, (r) => {
+      if (!this.resourceReady(r)) return;
+      if (Math.hypot(x - r.x, z - r.z) < r.radius + 0.2 + radius) { blocked = true; return false; }
+    });
+    if (blocked) return false;
     for (const u of this.units) {
       if (u.dead || u === ignoreUnit) continue;
       if (Math.hypot(x - u.x, z - u.z) < u.radius + radius + 0.15) return false;
@@ -1607,10 +1626,7 @@ export class Game {
       if (b.owner === this.humanId || b.dead) continue;
       b.mesh.visible = this.isExploredAt(b.x, b.z); // remembered, gets darkened by shroud
     }
-    for (const r of this.resources) {
-      if (r.dead) continue;
-      r.mesh.visible = this.isExploredAt(r.x, r.z);
-    }
+    // terrain trees are part of the landscape: always visible, no per-tree fog meshes
   }
 
   // worker rig LOD: skinning dozens of Cave Men is wasted work off-camera, so
@@ -1631,15 +1647,10 @@ export class Game {
     this.autoPerf();
     this.updateCamera(dt);
 
-    // trees sway gently; chopped stumps regrow on a timer (endless timber)
-    for (const r of this.resources) {
-      if (r.dead || r.depleted) continue;
-      if (r.top && r.top.visible) {
-        r.top.rotation.y += dt * 0.25;
-        r.mesh.rotation.y += dt * 0.02;
-      }
-    }
+    // chopped stumps regrow on a timer (endless timber); flush any
+    // harvest-rescaled terrain instances once per frame (batched upload)
     this.regrowTrees(dt);
+    this.flushTreeMatrices();
     // particles
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const pt = this.particles[i];

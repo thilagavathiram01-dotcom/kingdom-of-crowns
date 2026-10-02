@@ -369,7 +369,6 @@ export class HUD {
     c.fillStyle = '#4ade80';
     for (const r of g.resources) {
       if (r.dead || r.depleted) continue;
-      if (r.dead || !r.mesh.visible) continue;
       c.fillRect(wx(r.x) - 1, wz(r.z) - 1, 2, 2);
     }
     let dots = 0;

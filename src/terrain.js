@@ -300,6 +300,9 @@ export function buildTerrainVisuals(scene, T, opts = {}) {
   };
   let pi = 0, li = 0, guard = 0;
   const maxOb = CONFIG.terrain.treeColliders;
+  // every placed tree is harvestable: record its instances so workers can
+  // chop the REAL forest (shrink the instance, stump it, regrow it later)
+  const treeSpots = [];
   while ((pi < PINE_N || li < LEAF_N) && guard++ < 20000) {
     const x = (rng() - 0.5) * (size - 20), z = (rng() - 0.5) * (size - 20);
     // cluster into woods via noise gate
@@ -316,16 +319,20 @@ export function buildTerrainVisuals(scene, T, opts = {}) {
     dummy.updateMatrix();
     if (isPine) {
       pines.setMatrixAt(pi, dummy.matrix);
+      const trunkMat = dummy.matrix.clone();
       dummy.position.y = y + (2.2 + 1.8) * s * 0.5 + 0.8 * s;
       dummy.updateMatrix();
       pineTops.setMatrixAt(pi, dummy.matrix);
+      treeSpots.push({ x, z, y, s, isPine: true, idx: pi, trunkMesh: pines, topMesh: pineTops, trunkMat, topMat: dummy.matrix.clone() });
       if (obstacles && obstacles.length < maxOb && rng() < 0.45) obstacles.push({ x, z, r: 1.3 });
       pi++;
     } else {
       leaves.setMatrixAt(li, dummy.matrix);
+      const trunkMat = dummy.matrix.clone();
       dummy.position.y = y + 2.6 * s;
       dummy.updateMatrix();
       leafTops.setMatrixAt(li, dummy.matrix);
+      treeSpots.push({ x, z, y, s, isPine: false, idx: li, trunkMesh: leaves, topMesh: leafTops, trunkMat, topMat: dummy.matrix.clone() });
       if (obstacles && obstacles.length < maxOb && rng() < 0.4) obstacles.push({ x, z, r: 1.4 });
       li++;
     }
@@ -334,6 +341,7 @@ export function buildTerrainVisuals(scene, T, opts = {}) {
   leaves.count = Math.max(li, 0); leafTops.count = Math.max(li, 0);
   for (const m of [pines, pineTops, leaves, leafTops]) {
     m.castShadow = true; m.instanceMatrix.needsUpdate = true;
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // harvest scaling updates instances
     scene.add(m);
   }
 
@@ -404,5 +412,5 @@ export function buildTerrainVisuals(scene, T, opts = {}) {
   }
   tc.putImageData(img, 0, 0);
 
-  return { waterMat, waterY: WL, streaks, thumb, tufts };
+  return { waterMat, waterY: WL, streaks, thumb, tufts, trees: treeSpots };
 }
