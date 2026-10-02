@@ -81,11 +81,19 @@ async function boot() {
     console.warn('worker models unavailable — falling back to box workers', err);
   }
 
-  const game = new Game(canvas, {
-    onSelect: (sel) => hud?.onSelect(sel),
-    onMessage: (t) => hud?.message(t),
-    onGameOver: (win, time) => hud?.showGameOver(win, time),
-  }, { workerModels });
+  // never leave the player on a frozen splash: surface boot crashes visibly
+  let game;
+  try {
+    game = new Game(canvas, {
+      onSelect: (sel) => hud?.onSelect(sel),
+      onMessage: (t) => hud?.message(t),
+      onGameOver: (win, time) => hud?.showGameOver(win, time),
+    }, { workerModels });
+  } catch (err) {
+    bootGate?.remove();
+    showError(err);
+    throw err;
+  }
 
   ai = new AIManager(game);
   hud = new HUD(game, ai);

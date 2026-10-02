@@ -46,6 +46,9 @@ export class Game {
     // spatial hash for unit queries (rebuilt each frame)
     this.gridCell = 6;
     this.unitGrid = new Map();
+    // static tree-position grid (built once in buildForestResources, but
+    // spawn code queries it during initMap before that — init empty)
+    this._resGrid = new Map(); this._resCell = 8;
 
     // ---- kingdoms: k0 = human, k1..k29 = AI ----
     this.humanId = 'k0';
@@ -579,6 +582,7 @@ export class Game {
   }
 
   eachResourceNear(x, z, r, cb) {
+    if (!this._resGrid) return;
     const H = CONFIG.mapSize / 2, c = this._resCell || 8;
     const ix0 = Math.floor((x - r + H) / c), ix1 = Math.floor((x + r + H) / c);
     const iz0 = Math.floor((z - r + H) / c), iz1 = Math.floor((z + r + H) / c);
