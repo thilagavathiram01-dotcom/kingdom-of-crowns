@@ -3,6 +3,7 @@ import { Game } from './game.js';
 import { AIManager } from './ai.js';
 import { HUD } from './ui.js';
 import { loadWorkerModels } from './workers3d.js';
+import { loadBuildingModels } from './buildings3d.js';
 
 // visible error surface: never freeze silently — show what broke
 function showError(err) {
@@ -73,12 +74,18 @@ let hud, ai;
 
 // worker models are ~1.6MB of glTF: preload before the first frame so workers
 // never pop in as boxes. Any failure just keeps the original box workers.
+// Same for the KayKit castle/barracks/tower/wall models (~2MB).
 async function boot() {
-  let workerModels = null;
+  let workerModels = null, buildingModels = null;
   try {
     workerModels = await loadWorkerModels();
   } catch (err) {
     console.warn('worker models unavailable — falling back to box workers', err);
+  }
+  try {
+    buildingModels = await loadBuildingModels();
+  } catch (err) {
+    console.warn('building models unavailable — falling back to box buildings', err);
   }
 
   // never leave the player on a frozen splash: surface boot crashes visibly
@@ -88,7 +95,7 @@ async function boot() {
       onSelect: (sel) => hud?.onSelect(sel),
       onMessage: (t) => hud?.message(t),
       onGameOver: (win, time) => hud?.showGameOver(win, time),
-    }, { workerModels });
+    }, { workerModels, buildingModels });
   } catch (err) {
     bootGate?.remove();
     showError(err);

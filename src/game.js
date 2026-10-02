@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CONFIG, COLORS, kingdomColor, kingdomName } from './config.js';
 import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite } from './terrain.js';
 import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE } from './workers3d.js';
+import { buildingModel } from './buildings3d.js';
 
 let UID = 1;
 // scratch matrices for harvest scaling (no per-chop allocation)
@@ -14,6 +15,8 @@ export class Game {
     this.hooks = hooks; // { onSelect, onResources, onMessage, onGameOver }
     // skinned Cave Man worker models, or null -> plain box workers
     this.workerModels = !!assets.workerModels;
+    // KayKit castle/barracks/tower/wall models, or null -> procedural boxes
+    this.buildingModels = !!assets.buildingModels;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     this.scene = new THREE.Scene();
@@ -516,6 +519,14 @@ export class Game {
     return u;
   }
 
+  // KayKit visual for a building, or null -> caller builds the box fallback.
+  // The 4 baked team colors cycle by kingdom index; exact identity stays on
+  // flags, trim, minimap and unit colors.
+  buildingModelFor(type, owner, targetW) {
+    if (!this.buildingModels) return null;
+    return buildingModel(type, (this.players[owner]?.idx ?? 0) % 4, targetW);
+  }
+
   spawnBuilding(type, owner, x, z, rot = 0, len) {
     const st = CONFIG.buildings[type];
     const s = st.size;
@@ -524,13 +535,22 @@ export class Game {
       // long, thin, rotatable palisade. len lets fort runs stretch a piece so
       // walls tile edge-to-edge instead of leaving unit-sized gaps.
       const L = len ?? s, T = st.thick;
-      const block = new THREE.Mesh(new THREE.BoxGeometry(L, 2.0, T),
-        new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.95 }));
-      block.position.y = 1.0; block.castShadow = block.receiveShadow = true;
+      const km = this.buildingModelFor('wall', owner, 2);
+      if (km) {
+        // KayKit stone wall stretched to the slot; the team cap on top keeps
+        // ownership readable at RTS zoom.
+        km.model.scale.set(L / km.size.x, 2.0 / km.size.y, T / km.size.z);
+        g.add(km.model);
+      } else {
+        const block = new THREE.Mesh(new THREE.BoxGeometry(L, 2.0, T),
+          new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.95 }));
+        block.position.y = 1.0; block.castShadow = block.receiveShadow = true;
+        g.add(block);
+      }
       const cap = new THREE.Mesh(new THREE.BoxGeometry(L + 0.25, 0.35, T + 0.25),
         new THREE.MeshStandardMaterial({ color: this.teamColor(owner), emissive: this.teamColor(owner), emissiveIntensity: 0.45 }));
       cap.position.y = 2.1;
-      g.add(block, cap);
+      g.add(cap);
       g.rotation.y = rot; // long axis starts along +X, 90deg turns it down +Z
       g.position.set(x, this.gy(x, z), z);
       const bar = this.makeHealthBar(Math.min(L, 3.2)); // bar tracks a long wall's width
@@ -553,24 +573,43 @@ export class Game {
       return b;
     }
     if (type === 'turret') {
-      const base = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.42, s * 0.5, 1.4, 8),
-        new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 }));
-      base.position.y = 0.7; base.castShadow = true;
-      const collar = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.46, s * 0.46, 0.3, 8),
-        new THREE.MeshStandardMaterial({ color: this.teamColor(owner), emissive: this.teamColor(owner), emissiveIntensity: 0.5 }));
-      collar.position.y = 1.5;
-      const head = new THREE.Group();
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(s * 0.3, 10, 8),
-        new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.6 }));
-      dome.position.y = 1.9; dome.castShadow = true;
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 1.8, 6),
-        new THREE.MeshStandardMaterial({ color: 0x0f172a }));
-      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 1.9, 1.0);
-      head.add(dome, barrel);
-      g.add(base, collar, head);
+      const km = this.buildingModelFor('turret', owner, 2.4);
+      let head, barY;
+      if (km) {
+        // KayKit watchtower; a small team cannon on top keeps aim feedback
+        g.add(km.model);
+        head = new THREE.Group();
+        const hub = new THREE.Mesh(new THREE.SphereGeometry(0.32, 8, 6),
+          new THREE.MeshStandardMaterial({ color: this.teamColor(owner), emissive: this.teamColor(owner), emissiveIntensity: 0.5 }));
+        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 1.7, 6),
+          new THREE.MeshStandardMaterial({ color: 0x0f172a }));
+        barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0, 0.7);
+        barrel.castShadow = true;
+        head.add(hub, barrel);
+        head.position.y = km.height * 0.82;
+        g.add(head);
+        barY = km.height + 0.8;
+      } else {
+        const base = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.42, s * 0.5, 1.4, 8),
+          new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 }));
+        base.position.y = 0.7; base.castShadow = true;
+        const collar = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.46, s * 0.46, 0.3, 8),
+          new THREE.MeshStandardMaterial({ color: this.teamColor(owner), emissive: this.teamColor(owner), emissiveIntensity: 0.5 }));
+        collar.position.y = 1.5;
+        head = new THREE.Group();
+        const dome = new THREE.Mesh(new THREE.SphereGeometry(s * 0.3, 10, 8),
+          new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.6 }));
+        dome.position.y = 1.9; dome.castShadow = true;
+        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 1.8, 6),
+          new THREE.MeshStandardMaterial({ color: 0x0f172a }));
+        barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 1.9, 1.0);
+        head.add(dome, barrel);
+        g.add(base, collar, head);
+        barY = 3.4;
+      }
       g.position.set(x, this.gy(x, z), z);
       const bar = this.makeHealthBar(s * 0.9);
-      bar.position.y = 3.4;
+      bar.position.y = barY;
       g.add(bar);
       const ring = this.addSelectionRing(g, s * 0.75 + 0.4, COLORS.select);
       this.scene.add(g);
@@ -584,23 +623,32 @@ export class Game {
     this.colliderVersion++;
     return b;
   }
-    const base = new THREE.Mesh(new THREE.BoxGeometry(s, type === 'hq' ? 3.2 : 2.4, s),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 }));
-    base.position.y = type === 'hq' ? 1.6 : 1.2;
-    base.castShadow = base.receiveShadow = true;
-    const trim = new THREE.Mesh(new THREE.BoxGeometry(s + 0.4, 0.4, s + 0.4),
-      new THREE.MeshStandardMaterial({ color: this.teamColor(owner), emissive: this.teamColor(owner), emissiveIntensity: 0.35 }));
-    trim.position.y = type === 'hq' ? 3.3 : 2.5;
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(s * 0.42, 1.6, 4),
-      new THREE.MeshStandardMaterial({ color: 0x475569 }));
-    roof.position.y = type === 'hq' ? 4.2 : 3.3;
-    roof.rotation.y = Math.PI / 4;
-    g.add(base, trim, roof);
-    // windows glow strip for HQ
-    if (type === 'hq') {
-      const win = new THREE.Mesh(new THREE.BoxGeometry(s + 0.1, 0.35, s + 0.1),
-        new THREE.MeshBasicMaterial({ color: 0xfde68a }));
-      win.position.y = 2.2; g.add(win);
+    const km = this.buildingModelFor(type, owner, type === 'hq' ? 5.2 : 3.6);
+    let barY;
+    if (km) {
+      // KayKit castle / barracks; the rally flag keeps exact kingdom identity
+      g.add(km.model);
+      barY = km.height + 0.8;
+    } else {
+      const base = new THREE.Mesh(new THREE.BoxGeometry(s, type === 'hq' ? 3.2 : 2.4, s),
+        new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 }));
+      base.position.y = type === 'hq' ? 1.6 : 1.2;
+      base.castShadow = base.receiveShadow = true;
+      const trim = new THREE.Mesh(new THREE.BoxGeometry(s + 0.4, 0.4, s + 0.4),
+        new THREE.MeshStandardMaterial({ color: this.teamColor(owner), emissive: this.teamColor(owner), emissiveIntensity: 0.35 }));
+      trim.position.y = type === 'hq' ? 3.3 : 2.5;
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(s * 0.42, 1.6, 4),
+        new THREE.MeshStandardMaterial({ color: 0x475569 }));
+      roof.position.y = type === 'hq' ? 4.2 : 3.3;
+      roof.rotation.y = Math.PI / 4;
+      g.add(base, trim, roof);
+      // windows glow strip for HQ
+      if (type === 'hq') {
+        const win = new THREE.Mesh(new THREE.BoxGeometry(s + 0.1, 0.35, s + 0.1),
+          new THREE.MeshBasicMaterial({ color: 0xfde68a }));
+        win.position.y = 2.2; g.add(win);
+      }
+      barY = type === 'hq' ? 5.6 : 4.6;
     }
     // rally flag
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 6), new THREE.MeshStandardMaterial({ color: 0x94a3b8 }));
@@ -609,7 +657,7 @@ export class Game {
     flag.position.set(s / 2 + 0.25, 2.6, s / 2 - 0.3); g.add(flag);
     g.position.set(x, this.gy(x, z), z);
     const bar = this.makeHealthBar(s * 0.9);
-    bar.position.y = type === 'hq' ? 5.6 : 4.6;
+    bar.position.y = barY;
     g.add(bar);
     const ring = this.addSelectionRing(g, s * 0.75 + 0.4, COLORS.select);
     this.scene.add(g);
