@@ -366,5 +366,63 @@ ok('every fort piece has a slot length',
   ok('spacing floor is a real step up from the old grid', worst >= 60, `worst=${worst.toFixed(1)}`);
 }
 
+
+// ---------- 13. AI rebuilds walls a siege broke ----------
+{
+  const g = fakeGame();
+  g.players.k2 = { id: 'k2', idx: 2, logs: 4000, color: 0xef4444, alive: true };
+  const brain = new KingdomBrain(g, 'k2');
+  brain.planFort({ x: 0, z: 0 });
+  const first = brain.buildNextWalls(60, 0);
+  ok('the fort goes up in one pass', first === brain.walls.length, `built=${first}/${brain.walls.length}`);
+  const logsAfter = g.players.k2.logs;
+  // a siege chews through three segments
+  const victims = g.buildings.filter(b => b.type === 'wall').slice(0, 3);
+  for (const v of victims) v.dead = true;
+  g.colliderVersion++;
+  // the breach is walkable BEFORE the AI patches it
+  ok('a destroyed segment leaves a hole in the ring',
+    victims.some(v => g.wallSpotFree(v.x, v.z, v.rot, v.size)),
+    `free=${victims.map(v => g.wallSpotFree(v.x, v.z, v.rot, v.size)).join(',')}`);
+  const rebuilt = brain.buildNextWalls(60, 0);
+  ok('broken segments are rebuilt', rebuilt === victims.length, `rebuilt=${rebuilt}/${victims.length}`);
+  ok('rebuilding charges the treasury again', g.players.k2.logs === logsAfter - rebuilt * CONFIG.wallCost,
+    `logs=${g.players.k2.logs}`);
+  ok('rebuilt walls sit back on their slots',
+    victims.every(v => {
+      const slot = brain.walls.find(w => w.b && Math.hypot(w.b.x - v.x, w.b.z - v.z) < 0.01);
+      return !!slot;
+    }));
+}
+
+// ---------- 14. cost of the fat new world ----------
+{
+  const g = fakeGame();
+  for (let i = 0; i < CONFIG.kingdoms; i++) {
+    const k = `k${i}`;
+    g.players[k] = { id: k, idx: i, logs: 4000, color: 0x22c55e, alive: true };
+    const s = { x: -200 + (i % 6) * 76, z: -200 + Math.floor(i / 6) * 76 };
+    g.spawnBuilding('hq', k, s.x, s.z);
+    g.spawnBuilding('barracks', k, s.x + 6, s.z + 1);
+    g.buildStarterKeep(k, s.x, s.z);
+  }
+  const walls = g.buildings.filter(b => b.type === 'wall');
+  ok('a full world really has hundreds of walls', walls.length >= 400, `walls=${walls.length}`);
+  // the spatial hash must survive walls spread over many cells
+  const t0 = process.hrtime.bigint();
+  for (let i = 0; i < 200; i++) g.buildingGrid();
+  const gridMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  let hits = 0;
+  const t1 = process.hrtime.bigint();
+  for (let i = 0; i < 2000; i++) {
+    const w = walls[i % walls.length];
+    g.eachBuildingNear(w.x + 1.5, w.z + 1.5, 6, (b) => { hits++; });
+  }
+  const queryMs = Number(process.hrtime.bigint() - t1) / 1e6;
+  ok('building grid rebuild stays cheap', gridMs / 200 < 4, `${(gridMs / 200).toFixed(2)}ms per rebuild`);
+  ok('near queries stay cheap', queryMs / 2000 < 0.05, `${(queryMs / 2000).toFixed(4)}ms each`);
+  ok('queries still find the wall they look at', hits >= 2000, `hits=${hits}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
