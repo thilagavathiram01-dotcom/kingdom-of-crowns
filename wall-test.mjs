@@ -23,6 +23,7 @@ function fakeGame() {
   g.terrain = null;
   g.waterFx = { trees: [{ x: 40, z: 0 }, { x: -45, z: 12 }] };
   g.colliderVersion = 0;
+  g.pathCache = new Map();
   // spatial hash for unit queries (rebuilt each frame)
   g.gridCell = 6;
   g.unitGrid = new Map();
@@ -330,19 +331,20 @@ ok('every fort piece has a slot length',
   g.eachBuildingNear(0, 6, 1.0, (b) => { if (Math.hypot(b.x, b.z - 6) < 2) found++; });
   ok('no wall lies near a far query point', found === 0, `found=${found}`);
 
-  // steering: walking alongside a wall is fine, walking into it is not
+  // steering uses the same full body radius as overlap resolution: walking
+  // alongside a wall is fine, walking into it is not
   const u = g.spawnUnit('soldier', 'k0', 0, 3);
-  const blockedAt = (px, pz) => g.buildingBlocks(w, px, pz, u.radius * 0.7);
-  ok('a unit may walk beside a wall', !blockedAt(0, 1.2), `d=1.2`);
+  const blockedAt = (px, pz) => g.buildingBlocks(w, px, pz, u.radius);
+  ok('a unit may walk beside a wall', !blockedAt(0, 1.4), `d=1.4`);
   ok('a unit may stand past the wall end', !blockedAt(3.4, 0), `x=3.4`);
   ok('a unit may not stand in the wall', blockedAt(0, 0) && blockedAt(2.0, 0.2));
   ok('a unit may not stand past the far end', blockedAt(2.6, 0), `x=2.6`);
 
   // a rotated wall is blocked along its own axis, not across it
   const v = g.spawnBuilding('wall', 'k0', 20, 0, Math.PI / 2, 4.6);
-  const pad = CONFIG.units.soldier.radius * 0.7;
-  ok('a rotated wall blocks along Z', g.buildingBlocks(v, 20, 1.5, pad) && !g.buildingBlocks(v, 21.2, 0, pad));
-  ok('a rotated wall is clear beside it', !g.buildingBlocks(v, 21.2, 1.5, pad));
+  const pad = CONFIG.units.soldier.radius;
+  ok('a rotated wall blocks along Z', g.buildingBlocks(v, 20, 1.5, pad) && !g.buildingBlocks(v, 21.4, 0, pad));
+  ok('a rotated wall is clear beside it', !g.buildingBlocks(v, 21.4, 1.5, pad));
 }
 
 
@@ -503,6 +505,33 @@ ok('every fort piece has a slot length',
   const hq = g.spawnBuilding('hq', 'k0', -20, 0);
   ok('HQ demolition is refused', g.demolishBuilding(hq) === false);
   ok('a refused HQ demolition keeps the building', g.buildings.includes(hq));
+}
+
+// ---------- 18. short LOS hops cannot step over a thin wall ----------
+{
+  const g = fakeGame();
+  g.spawnBuilding('wall', 'k0', 0, 0, 0, 4.6);
+  const r = CONFIG.units.soldier.radius;
+  ok('a short hop across the wall is blocked', !g.losClear(0, -1.8, 0, 1.8, r));
+  ok('the segment test sees the crossing', g.segmentBlocked(0, -1.8, 0, 1.8, r));
+  ok('a parallel lane beside the wall stays clear', g.losClear(-2, 2, 2, 2, r));
+  ok('point clearance matches the body radius', g.pointBlocked(0, 1.2, r) && !g.pointBlocked(0, 1.4, r));
+}
+
+// ---------- 19. sealed courtyards slide instead of freezing ----------
+{
+  const g = fakeGame();
+  g.spawnBuilding('wall', 'k0', 0, -10, 0, 60);
+  g.spawnBuilding('wall', 'k0', 0, 10, 0, 60);
+  g.spawnBuilding('wall', 'k0', -30, 0, Math.PI / 2, 20);
+  g.spawnBuilding('wall', 'k0', 30, 0, Math.PI / 2, 20);
+  const u = g.spawnUnit('soldier', 'k0', 0, 0);
+  const before = { x: u.x, z: u.z };
+  const status = g.navigate(u, 100, 0, 0.1, 0.6, 2);
+  ok('a sealed courtyard does not report a dead stop', status === 'moving', `status=${status}`);
+  ok('the fallback keeps moving inside the courtyard', Math.hypot(u.x - before.x, u.z - before.z) > 0.1);
+  ok('sliding does not clip through the courtyard walls',
+    g.buildings.filter(b => b.type === 'wall').every(w => !g.buildingBlocks(w, u.x, u.z, u.radius)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

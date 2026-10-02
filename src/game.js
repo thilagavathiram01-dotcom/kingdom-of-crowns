@@ -2078,13 +2078,16 @@ export class Game {
         if (Math.hypot(u.x - u.lastX, u.z - u.lastZ) < u.speed * dt * 0.2) {
           u.stuckT += dt;
           if (u.stuckT > 0.7) {
+            const goalX = u.pathTx ?? u.tx ?? u.x, goalZ = u.pathTz ?? u.tz ?? u.z;
             u.stuckT = 0; u.path = null; u.repathT = 0;
-            // sidestep perpendicular to travel dir; never into a wall
-            const a = Math.atan2(u.z - (u.pathTz ?? u.z), u.x - (u.pathTx ?? u.x)) + Math.PI / 2;
+            // sidestep perpendicular to travel dir; never into a wall. Nearby
+            // units are ignored here because resolveOverlaps separates them
+            // after the teleport.
+            const a = Math.atan2(u.z - goalZ, u.x - goalX) + Math.PI / 2;
             const tryStep = (ang, dist) => {
               const nx = THREE.MathUtils.clamp(u.x + Math.cos(ang) * dist, -this.mapBound(4), this.mapBound(4));
               const nz = THREE.MathUtils.clamp(u.z + Math.sin(ang) * dist, -this.mapBound(4), this.mapBound(4));
-              if (!this.pointBlocked(nx, nz, u.radius) && this.isSpotFree(nx, nz, u.radius, u)) { u.x = nx; u.z = nz; return true; }
+              if (!this.pointBlocked(nx, nz, u.radius) && this.spotClearOfWorld(nx, nz, u.radius, u)) { u.x = nx; u.z = nz; return true; }
               return false;
             };
             if (!tryStep(a, 0.8)) tryStep(a + Math.PI, 0.8);
@@ -2448,19 +2451,92 @@ export class Game {
   pathCell() { return 3; }
   pathN() { return Math.ceil(CONFIG.mapSize / this.pathCell()); }
 
+  segPointDist(ax, az, bx, bz, px, pz) {
+    const dx = bx - ax, dz = bz - az;
+    const l2 = dx * dx + dz * dz;
+    let t = l2 > 0 ? ((px - ax) * dx + (pz - az) * dz) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (ax + dx * t), pz - (az + dz * t));
+  }
+
+  segsIntersect(ax, az, bx, bz, cx, cz, dx, dz) {
+    const d1 = (bx - ax) * (cz - az) - (bz - az) * (cx - ax);
+    const d2 = (bx - ax) * (dz - az) - (bz - az) * (dx - ax);
+    const d3 = (dx - cx) * (az - cz) - (dz - cz) * (ax - cx);
+    const d4 = (dx - cx) * (bz - cz) - (dz - cz) * (bx - cx);
+    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+  }
+
+  segSegDist(ax, az, bx, bz, cx, cz, dx, dz) {
+    if (this.segsIntersect(ax, az, bx, bz, cx, cz, dx, dz)) return 0;
+    return Math.min(
+      this.segPointDist(ax, az, bx, bz, cx, cz),
+      this.segPointDist(ax, az, bx, bz, dx, dz),
+      this.segPointDist(cx, cz, dx, dz, ax, az),
+      this.segPointDist(cx, cz, dx, dz, bx, bz),
+    );
+  }
+
+  segRectDist(ax, az, bx, bz, hw, hd) {
+    const inside = (x, z) => Math.abs(x) <= hw && Math.abs(z) <= hd;
+    if (inside(ax, az) || inside(bx, bz)) return 0;
+    const edges = [
+      [-hw, -hd, hw, -hd], [hw, -hd, hw, hd],
+      [hw, hd, -hw, hd], [-hw, hd, -hw, -hd],
+    ];
+    let best = Infinity;
+    for (const [cx, cz, dx, dz] of edges) {
+      best = Math.min(best, this.segSegDist(ax, az, bx, bz, cx, cz, dx, dz));
+    }
+    return best;
+  }
+
+  // Exact segment test for smoothing and long-range moves. Sampling every 3m
+  // could step over a one-metre wall on a short hop; this checks the whole
+  // segment against nearby footprints instead.
+  segmentBlocked(ax, az, bx, bz, r) {
+    const d = Math.hypot(bx - ax, bz - az);
+    const seen = new Set();
+    const steps = Math.max(1, Math.ceil(d / 6));
+    for (let k = 0; k <= steps; k++) {
+      const t = k / steps;
+      this.eachBuildingNear(ax + (bx - ax) * t, az + (bz - az) * t, 8, (b) => { seen.add(b); });
+    }
+    for (const b of seen) {
+      if (b.dead) continue;
+      if (b.hw === undefined) {
+        if (this.segPointDist(ax, az, bx, bz, b.x, b.z) < b.radius + r) return true;
+      } else {
+        const lax = (ax - b.x) * b.rotC + (az - b.z) * b.rotS;
+        const laz = -(ax - b.x) * b.rotS + (az - b.z) * b.rotC;
+        const lbx = (bx - b.x) * b.rotC + (bz - b.z) * b.rotS;
+        const lbz = -(bx - b.x) * b.rotS + (bz - b.z) * b.rotC;
+        if (this.segRectDist(lax, laz, lbx, lbz, b.hw, b.hd) < r) return true;
+      }
+    }
+    for (const o of this.obstacles) {
+      const minX = Math.min(ax, bx) - o.r - r, maxX = Math.max(ax, bx) + o.r + r;
+      const minZ = Math.min(az, bz) - o.r - r, maxZ = Math.max(az, bz) + o.r + r;
+      if (o.x < minX || o.x > maxX || o.z < minZ || o.z > maxZ) continue;
+      if (this.segPointDist(ax, az, bx, bz, o.x, o.z) < o.r + r) return true;
+    }
+    return false;
+  }
+
   pointBlocked(x, z, r) {
     const H = CONFIG.mapSize / 2 - 1.2;
     if (Math.abs(x) > H || Math.abs(z) > H) return true;
     if (this.terrain && this.terrain.blocked(x, z)) return true; // river / mountain
-    const m = r * 0.3 + 0.35;
+    // One clearance everywhere: pathing, steering and overlap resolution all
+    // use the unit's full body radius. Smaller steering pads used to aim units
+    // at gaps the resolver then rejected, causing wall jitter.
     let hit = false;
     this.eachBuildingNear(x, z, 7, (b) => {
-      // thin long walls get an inflated pad so no lane leaks between segments
-      if (this.buildingBlocks(b, x, z, b.hw === undefined ? m : m + 0.45)) { hit = true; return false; }
+      if (this.buildingBlocks(b, x, z, r)) { hit = true; return false; }
     });
     if (hit) return true;
     for (const o of this.obstacles) {
-      const dx = x - o.x, dz = z - o.z, rr = o.r + m;
+      const dx = x - o.x, dz = z - o.z, rr = o.r + r;
       if (dx * dx + dz * dz < rr * rr) return true;
     }
     return false;
@@ -2468,12 +2544,14 @@ export class Game {
 
   losClear(ax, az, bx, bz, r) {
     const d = Math.hypot(bx - ax, bz - az);
-    const steps = Math.max(1, Math.ceil(d / 3.0));
-    for (let k = 1; k < steps; k++) {
-      const t = k / steps;
-      if (this.pointBlocked(ax + (bx - ax) * t, az + (bz - az) * t, r)) return false;
+    if (this.terrain) {
+      const steps = Math.max(1, Math.ceil(d / 2));
+      for (let k = 1; k < steps; k++) {
+        const t = k / steps;
+        if (this.terrain.blocked(ax + (bx - ax) * t, az + (bz - az) * t)) return false;
+      }
     }
-    return true;
+    return !this.segmentBlocked(ax, az, bx, bz, r);
   }
 
   findPath(sx, sz, tx, tz, radius) {
@@ -2642,7 +2720,7 @@ export class Game {
     // slide around terrain/buildings: try full step, then left/right deflects
     const blocked = (px, pz) => {
       if (this.terrain && this.terrain.blocked(px, pz)) return true;
-      const ur = u.radius * 0.7;
+      const ur = u.radius;
       // spatial-hash query: a full building scan here cost units x buildings per frame
       let hit = false;
       this.eachBuildingNear(px, pz, 6, (b) => {
@@ -2676,6 +2754,26 @@ export class Game {
     u.z = THREE.MathUtils.clamp(nz, -H, H);
   }
 
+  // A* can fail inside a sealed courtyard or against a fresh wall line. Instead
+  // of standing still until the next repath, slide persistently to one side of
+  // the blockage. The side follows the unit id so two stuck units do not both
+  // flip sides every retry and dance in place.
+  blockedDetour(u, tx, tz, dt) {
+    const base = Math.atan2(tz - u.z, tx - u.x);
+    const first = (u.id % 2 === 0 ? 1 : -1) * 0.65;
+    const probe = Math.max(3, u.speed * 0.6);
+    const H = this.mapBound(4);
+    for (const off of [first, first * 2, -first, -first * 2, Math.PI / 2, -Math.PI / 2]) {
+      const px = THREE.MathUtils.clamp(u.x + Math.cos(base + off) * probe, -H, H);
+      const pz = THREE.MathUtils.clamp(u.z + Math.sin(base + off) * probe, -H, H);
+      if (this.pointBlocked(px, pz, u.radius)) continue;
+      this.steer(u, px, pz, dt, !!u.target);
+      u.path = null; u.repathT = 0.6;
+      return true;
+    }
+    return false;
+  }
+
   // high level: follow cached path, repathing as needed.
   // returns 'arrived' | 'moving' | 'blocked'
   navigate(u, tx, tz, dt, arriveR = 0.6, repathEvery = 2.0) {
@@ -2693,11 +2791,12 @@ export class Game {
     if (!u.path || moved > 3 || u.repathT <= 0) {
       const res = this.findPath(u.x, u.z, tx, tz, u.radius);
       u.pathTx = tx; u.pathTz = tz; u.repathT = repathEvery;
-      if (res === null) { u.path = null; return 'blocked'; }
+      if (res === null) return this.blockedDetour(u, tx, tz, dt) ? 'moving' : 'blocked';
       u.path = res.length ? res : null; // [] is truthy — normalize to null
       if (!u.path) {
-        // same cell: drive direct if LOS allows
+        // same cell: drive direct if LOS allows, otherwise slide around rubble
         if (this.losClear(u.x, u.z, tx, tz, u.radius)) { this.steer(u, tx, tz, dt, !!u.target); return dd <= arriveR ? 'arrived' : 'moving'; }
+        this.blockedDetour(u, tx, tz, dt);
         return 'moving';
       }
     }
@@ -2705,6 +2804,7 @@ export class Game {
       // defensive: never index an empty path (stale [] from cache/smoothing)
       u.path = null;
       if (this.losClear(u.x, u.z, tx, tz, u.radius)) { this.steer(u, tx, tz, dt, !!u.target); return dd <= arriveR ? 'arrived' : 'moving'; }
+      this.blockedDetour(u, tx, tz, dt);
       return 'moving';
     }
     let head = u.path[0];
