@@ -1,6 +1,7 @@
 // Headless checks for the wall rework: long rotatable segments, elastic tiling,
 // oriented-box collision, cheap walls, starter keeps and caveman troop stats.
 import * as THREE from 'three';
+import { readFileSync } from 'fs';
 import { CONFIG } from './src/config.js';
 import { Game } from './src/game.js';
 import { KingdomBrain } from './src/ai.js';
@@ -496,6 +497,24 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   ok('the fallback keeps moving inside the courtyard', Math.hypot(u.x - before.x, u.z - before.z) > 0.1);
   ok('sliding does not clip through the courtyard walls',
     g.buildings.filter(b => b.type === 'wall').every(w => !g.buildingBlocks(w, u.x, u.z, u.radius)));
+}
+
+// ---------- 20. peasant worker models ship with skeletons + textures ----------
+{
+  const files = ['peasant_1', 'peasant_2', 'peasant_3', 'peasant_4', 'peasant_5', 'peasant_6'];
+  let good = 0, detail = '';
+  for (const f of files) {
+    try {
+      const d = readFileSync(`public/models/people/${f}.glb`);
+      const jl = d.readUInt32LE(12);
+      const j = JSON.parse(d.subarray(20, 20 + jl).toString('utf8'));
+      const joints = j.skins?.[0]?.joints?.length || 0;
+      const imgs = j.images?.length || 0;
+      if (joints >= 30 && imgs >= 1) good++;
+      else detail += ` ${f}(joints=${joints},images=${imgs})`;
+    } catch (e) { detail += ` ${f}(unreadable)`; }
+  }
+  ok('all 6 peasant models have full skeletons + textures', good === files.length, `good=${good}/6${detail}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG, COLORS, kingdomColor, kingdomName } from './config.js';
 import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite } from './terrain.js';
-import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE } from './workers3d.js';
+import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE, createPeopleRig, PEOPLE_SCALE } from './workers3d.js';
 import { buildingModel } from './buildings3d.js';
 
 let UID = 1;
@@ -15,6 +15,8 @@ export class Game {
     this.hooks = hooks; // { onSelect, onResources, onMessage, onGameOver }
     // skinned Cave Man worker models, or null -> plain box workers
     this.workerModels = !!assets.workerModels;
+    // medieval peasant models for workers, or null -> Cave Man / box fallback
+    this.peopleModels = !!assets.peopleModels;
     // KayKit castle/barracks/tower/wall models, or null -> procedural boxes
     this.buildingModels = !!assets.buildingModels;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -417,10 +419,12 @@ export class Game {
     const g = new THREE.Group();
     let body;
     let rig = null;
-    // Cave Man rig drives the workers AND the club/spear troops
+    // Cave Man rig drives the club/spear troops; workers wear the peasant
+    // models first and fall back to the Cave Man rig, then plain boxes.
     const CAVEMAN = { worker: 1, brute: 1.16, hunter: 0.94 };
     const cav = CAVEMAN[type];
-    if (cav && this.workerModels) rig = createWorkerRig(this.teamColor(owner), WORKER_SCALE * cav);
+    if (type === 'worker' && this.peopleModels) rig = createPeopleRig(PEOPLE_SCALE);
+    if (!rig && cav && this.workerModels) rig = createWorkerRig(this.teamColor(owner), WORKER_SCALE * cav);
     const mat = new THREE.MeshStandardMaterial({ color: this.teamColor(owner), roughness: 0.6 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
     if (type === 'worker') {
@@ -547,9 +551,9 @@ export class Game {
         block.position.y = 1.0; block.castShadow = block.receiveShadow = true;
         g.add(block);
       }
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(L + 0.25, 0.35, T + 0.25),
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(L * 0.96, 0.16, T * 0.5),
         new THREE.MeshStandardMaterial({ color: this.teamColor(owner), emissive: this.teamColor(owner), emissiveIntensity: 0.45 }));
-      cap.position.y = 2.1;
+      cap.position.y = 2.02; // thin team trim on the stone top, not a full cap
       g.add(cap);
       g.rotation.y = rot; // long axis starts along +X, 90deg turns it down +Z
       g.position.set(x, this.gy(x, z), z);

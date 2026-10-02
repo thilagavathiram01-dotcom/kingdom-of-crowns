@@ -198,3 +198,54 @@ export function updateWorkerRig(rig, dt, walking) {
   rig.root.position.y = rig.lift + Math.abs(s) * 0.075 * k;
   rig.root.rotation.z = s * 0.03 * k;
 }
+
+// ---------------------------------------------------------------------------
+// Medieval people (CraftPix peasants, converted FBX -> GLB): the worker skin.
+// T-pose, 41-bone humanoid, no clips — the same procedural stride above drives
+// it, so no animation assets are needed. Toe-bone analysis shows the models
+// face +Z, matching the game's atan2(dx, dz) yaw with no extra facing fix.
+// Colours are baked (no per-kingdom dye); the team underglow disc + minimap
+// keep ownership readable.
+const PEOPLE_FILES = ['peasant_1', 'peasant_2', 'peasant_3', 'peasant_4', 'peasant_5', 'peasant_6'];
+export const PEOPLE_SCALE = 1.0; // ~1.8m tall at 1:1, matches the old rig
+
+let PEOPLE = null;
+
+export async function loadPeopleModels() {
+  const base = basePath();
+  const loader = new GLTFLoader();
+  const variants = [];
+  for (const file of PEOPLE_FILES) {
+    const gltf = await loader.loadAsync(base + 'models/people/' + file + '.glb');
+    const scene = gltf.scene;
+    scene.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) { o.castShadow = true; } });
+    scene.updateMatrixWorld(true);
+    const lift = -new THREE.Box3().setFromObject(scene).min.y;
+    variants.push({ scene, lift });
+  }
+  PEOPLE = { variants, next: 0 };
+  return PEOPLE;
+}
+
+// Same rig shape as the Cave Man (root/lift/phase/walkW/bones, no mixer), so
+// updateWorkerRig, the far-LOD box swap and facing all work unchanged.
+export function createPeopleRig(scale = PEOPLE_SCALE) {
+  if (!PEOPLE) return null;
+  const v = PEOPLE.variants[PEOPLE.next++ % PEOPLE.variants.length];
+  const model = skeletonClone(v.scene);
+  const find = (n) => model.getObjectByName(n);
+  const bones = [find('Upperarm_L'), find('Upperarm_R'), find('Thigh_L'), find('Thigh_R')];
+  model.scale.setScalar(scale);
+  const root = new THREE.Group();
+  root.position.y = v.lift * scale;
+  root.add(model);
+  return {
+    root,
+    lift: v.lift * scale,
+    phase: Math.random() * Math.PI * 2,
+    walkW: 0,
+    bones,
+    mixer: null,
+    action: null,
+  };
+}
