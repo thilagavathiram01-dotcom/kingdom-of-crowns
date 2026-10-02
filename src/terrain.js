@@ -75,11 +75,11 @@ export function scoreSite(T, x, z) {
   for (let k = 0; k < 9; k++) {
     const a = (k / 9) * Math.PI * 2;
     const sx = x + Math.cos(a) * R, sz = z + Math.sin(a) * R;
-    const y = T.sample ? T.sample(sx, sz) : 0;
+    const y = T && T.sample ? T.sample(sx, sz) : 0;
     worst = Math.max(worst, y);
     if (y < WL + 0.5) water++;
   }
-  const c = T.sample ? T.sample(x, z) : 0;
+  const c = T && T.sample ? T.sample(x, z) : 0;
   worst = Math.max(worst, c);
   const riverD = Math.abs(x - riverX(z));
   const riverPenalty = riverD < 16 ? (16 - riverD) * 2 : 0;

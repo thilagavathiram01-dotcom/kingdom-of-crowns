@@ -8,6 +8,8 @@ export const ICONS = {
   tank: S(`<rect x="2.5" y="11" width="13" height="6" rx="2"/><path d="M15.5 13.5H21"/><circle cx="7" cy="18.5" r="1.8"/><circle cx="12.5" cy="18.5" r="1.8"/>`),
   scout: S(`<path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/>`),
   artillery: S(`<circle cx="7" cy="17.5" r="3"/><circle cx="17.5" cy="17.5" r="2.4"/><path d="M9.5 15.5L15 6.5h4.5"/>`),
+  brute: S(`<circle cx="10" cy="7" r="2.6"/><path d="M5.5 20c.7-3.4 2.4-5.4 4.5-5.4 1.2 0 2.2.4 3 1.1"/><path d="M13.5 11.5L19 7.5"/><path d="M17.2 4.2l3.4 3.4-2 2-3.4-3.4z"/>`),
+  hunter: S(`<circle cx="9.5" cy="7" r="2.4"/><path d="M5 20c.6-3.2 2.3-5 4.5-5 1.1 0 2.1.4 2.9 1"/><path d="M3 17.5L20.5 5"/><path d="M17.5 3.5l3 3-1.6 1.6-3-3z"/>`),
   hq: S(`<path d="M3.5 11L12 4l8.5 7"/><path d="M5.5 9.5V20h13V9.5"/><path d="M10 20v-5.5h4V20"/>`),
   barracks: S(`<path d="M3.5 20v-8.5L9 14V9.5l5.5 3V6.5H20V20z"/><path d="M3.5 20h17"/>`),
   turret: S(`<circle cx="12" cy="14.5" r="5"/><path d="M12 14.5V4"/><path d="M12 4h6"/><path d="M7.5 21h9"/>`),

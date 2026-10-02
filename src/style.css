@@ -172,10 +172,13 @@ html.lock-landscape, html.lock-landscape body { overflow: hidden; overscroll-beh
   animation: pulse 1.4s infinite;
 }
 #order-banner-text { overflow: hidden; text-overflow: ellipsis; }
-#order-cancel {
+#order-cancel, #order-rotate {
   min-width: 30px; min-height: 30px; border-radius: 8px; border: 1px solid var(--line);
   background: #1c2537; color: #fff; font-size: 13px; cursor: pointer;
+  touch-action: manipulation;
 }
+#order-rotate { min-width: 38px; min-height: 34px; font-size: 17px; color: var(--gold); }
+#order-rotate:active { background: #2b3a56; }
 @keyframes pulse { 50% { box-shadow: 0 0 18px rgba(74,222,128,.55); } }
 #message-feed {
   position: absolute; top: calc(var(--top-h) + 8px); left: calc(10px + var(--sat-l)); z-index: 16;

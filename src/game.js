@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG, COLORS, kingdomColor, kingdomName } from './config.js';
 import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite } from './terrain.js';
-import { createWorkerRig, updateWorkerRig as animateWorkerRig } from './workers3d.js';
+import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE } from './workers3d.js';
 
 let UID = 1;
 // scratch matrices for harvest scaling (no per-chop allocation)
@@ -69,7 +69,7 @@ export class Game {
     // them, then the 30 flattest well-spread sites become villages with pads.
     // Fresh seed every game: a new continent each saga.
     this.obstacles = [];
-    this.slots = this.layoutSlots(CONFIG.spawnSlots);
+    this.slots = this.layoutSlots();
     this.terrain = generateTerrain(CONFIG.mapSize, [], Math.floor(Math.random() * 1e9), this.slots);
     this.kingdomSpawns = this.pickKingdomSpawns(this.slots, CONFIG.kingdoms);
     for (const s of this.kingdomSpawns) applyFlatten(this.terrain, s.x, s.z, 24, 0.5, 2.0);
@@ -114,18 +114,20 @@ export class Game {
     return v;
   }
 
-  layoutSlots(n) {
-    // jittered grid: uniform coverage so farthest-point sampling can keep
-    // every village far from every other (a spiral packs its core too tight)
-    const H = CONFIG.mapSize / 2, out = [];
-    const G = Math.ceil(Math.sqrt(n));
-    const cell = (2 * H - 32) / G;
+  layoutSlots() {
+    // Jittered grid, sized BY the spacing we want: if the candidate cells are
+    // tighter than kingdomSpacing then no amount of sampling can keep two
+    // villages apart, because the neighbours are already that close.
+    const H = CONFIG.mapSize / 2, span = 2 * H - 32, out = [];
+    let G = Math.max(2, Math.round(span / CONFIG.kingdomSpacing));
+    if (G * G < CONFIG.kingdoms) G = Math.ceil(Math.sqrt(CONFIG.kingdoms));
+    const cell = span / G;
+    const jit = cell * 0.07; // small: jitter must not eat the spacing floor
     for (let gx = 0; gx < G; gx++) {
       for (let gz = 0; gz < G; gz++) {
-        if (out.length >= n) break;
         out.push({
-          x: THREE.MathUtils.clamp(-H + 16 + cell * (gx + 0.5) + (Math.random() - 0.5) * cell * 0.45, -H + 16, H - 16),
-          z: THREE.MathUtils.clamp(-H + 16 + cell * (gz + 0.5) + (Math.random() - 0.5) * cell * 0.45, -H + 16, H - 16),
+          x: THREE.MathUtils.clamp(-H + 16 + cell * (gx + 0.5) + (Math.random() - 0.5) * jit, -H + 16, H - 16),
+          z: THREE.MathUtils.clamp(-H + 16 + cell * (gz + 0.5) + (Math.random() - 0.5) * jit, -H + 16, H - 16),
         });
       }
     }
@@ -160,9 +162,44 @@ export class Game {
       }
       return { m, ai, aj };
     };
-    for (let it = 0; it < 40; it++) {
+    for (let it = 0; it < 60; it++) {
       const { m, ai, aj } = gapInfo(picked);
-      if (m >= 58 || !rest.length) break;
+      if (m >= CONFIG.kingdomSpacing || !rest.length) break;
+      // cheap first: slide the two closest villages apart inside their own
+      // jitter margin - keeps the spacing without giving up good terrain
+      {
+        const cell = (2 * (CONFIG.mapSize / 2) - 32) / Math.max(2, Math.round((CONFIG.mapSize - 32) / CONFIG.kingdomSpacing));
+        const step = cell * 0.14;
+        const minTo = (p, idx, skip) => {
+          let md = 1e9;
+          for (let i = 0; i < picked.length; i++) {
+            if (i === idx || i === skip) continue;
+            md = Math.min(md, Math.hypot(p.x - picked[i].x, p.z - picked[i].z));
+          }
+          return md;
+        };
+        for (const idx of [ai, aj]) {
+          const other = idx === ai ? aj : ai;
+          const start = minTo(picked[idx], idx, other);
+          if (start > m) continue; // this one is not the problem
+          const away = { x: picked[idx].x - picked[other].x, z: picked[idx].z - picked[other].z };
+          const al = Math.hypot(away.x, away.z) || 1;
+          const ux = away.x / al, uz = away.z / al;
+          const lim = CONFIG.mapSize / 2 - 16;
+          let bx = picked[idx].x, bz = picked[idx].z, bd = start;
+          // walk outward along the away direction, fanning out a little
+          for (const [fx, fz] of [[1, 0], [0.94, 0.34], [0.34, 0.94], [0, 1], [-0.34, 0.94], [-0.94, 0.34], [-1, 0], [-0.94, -0.34]]) {
+            for (let k = 1; k <= 5; k++) {
+              const nx = THREE.MathUtils.clamp(picked[idx].x + (ux * fx - uz * fz) * step * k, -lim, lim);
+              const nz = THREE.MathUtils.clamp(picked[idx].z + (uz * fx + ux * fz) * step * k, -lim, lim);
+              const md = minTo({ x: nx, z: nz }, idx, other);
+              if (md > bd) { bd = md; bx = nx; bz = nz; }
+            }
+          }
+          if (bd > start + 0.01) { picked[idx].x = bx; picked[idx].z = bz; }
+        }
+        if (gapInfo(picked).m > m) continue;
+      }
       let swapped = false;
       for (const idx of [ai, aj]) {
         let bs = null, bv = m;
@@ -253,7 +290,7 @@ export class Game {
 
     this.camera.far = 1600;
     this.camera.updateProjectionMatrix();
-    this.scene.fog = new THREE.Fog(0x0b0e14, 100, 560);
+    this.scene.fog = new THREE.Fog(0x0b0e14, 110, 640);
     this.camDist = 58;
 
     // ---- continent: heightfield ground, river + bridges, forests, grass ----
@@ -322,18 +359,34 @@ export class Game {
     return ring;
   }
 
+  // walls are long thin boxes, so a circle would lie about their footprint:
+  // draw the real oriented rectangle instead
+  addWallRing(obj, L, T, color) {
+    const ring = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(L + 0.35, 0.02, T + 0.35)),
+      new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95 })
+    );
+    ring.position.y = 0.08;
+    ring.visible = false;
+    obj.add(ring);
+    return ring;
+  }
+
   initMap() {
     const H = CONFIG.mapSize / 2;
     // one HQ + barracks + small starters per kingdom (rise, don't rush)
     this.kingdomIds().forEach((id, i) => {
       const s = this.kingdomSpawns[i];
       const hq = this.spawnBuilding('hq', id, s.x, s.z);
-      const bx = THREE.MathUtils.clamp(s.x + 9, -H + 6, H - 6);
+      const bx = THREE.MathUtils.clamp(s.x + 6, -H + 6, H - 6);
       const bz = THREE.MathUtils.clamp(s.z + 1, -H + 6, H - 6);
-      this.spawnBuilding('barracks', id, this.isSpotFree(bx, bz, 3.2) ? bx : s.x - 9, bz);
+      this.spawnBuilding('barracks', id, this.isSpotFree(bx, bz, 3.2) ? bx : s.x - 6, bz);
       for (let k = 0; k < 3; k++) this.spawnUnit('worker', id, s.x + 3 + k * 1.5, s.z + 5);
       this.spawnUnit('soldier', id, s.x + 3, s.z + 8);
       this.spawnUnit('scout', id, s.x + 5, s.z + 8);
+      this.spawnUnit('brute', id, s.x - 2, s.z + 7.5);
+      // every kingdom starts behind its own palisade, one gate facing the woods
+      this.buildStarterKeep(id, s.x, s.z);
     });
 
     // timber economy: EVERY terrain tree is harvestable. Workers seek the
@@ -346,6 +399,46 @@ export class Game {
     this.updateFog();
   }
 
+  // Every kingdom opens behind a palisade: a square run of long wall segments
+  // with one gate aimed at the nearest grove, so early raids have to chew
+  // timber before they reach the HQ (and the economy never breaks its own wall).
+  buildStarterKeep(id, cx, cz) {
+    const { keepHalf: half, keepGate: gw } = CONFIG.walls;
+    const st = CONFIG.buildings.wall;
+    const hd = st.thick * 0.5;
+    let bd = 1e9, tx = cx, tz = cz + 1;
+    for (const t of (this.waterFx?.trees || [])) {
+      if (Math.abs(t.x - cx) < half + 3 && Math.abs(t.z - cz) < half + 3) continue;
+      const d = Math.hypot(t.x - cx, t.z - cz);
+      if (d < bd) { bd = d; tx = t.x; tz = t.z; }
+    }
+    const dx = tx - cx, dz = tz - cz;
+    const east = Math.abs(dx) > Math.abs(dz);
+    const side = east ? (dx > 0 ? 1 : 3) : (dz > 0 ? 2 : 0);
+    const off = THREE.MathUtils.clamp(east ? dz : dx, -(half - gw / 2 - 1), half - gw / 2 - 1);
+    const span = half - hd; // sides stop short of the corner: pieces meet, never overlap
+    const runs = [];
+    for (let s = 0; s < 4; s++) {
+      if (s === side) runs.push([s, -span, off - gw / 2], [s, off + gw / 2, span]);
+      else runs.push([s, -span, span]);
+    }
+    let n = 0;
+    for (const [s, lo, hi] of runs) {
+      const run = hi - lo;
+      if (run < 1.4) continue;
+      const segs = Math.max(1, Math.round(run / st.size));
+      const slot = run / segs; // elastic walls: each piece fills its slot exactly
+      for (let i = 0; i < segs; i++) {
+        const t = lo + slot * (i + 0.5);
+        const x = s === 1 ? cx + half : s === 3 ? cx - half : cx + t;
+        const z = s === 0 ? cz - half : s === 2 ? cz + half : cz + t;
+        const rot = s === 0 || s === 2 ? 0 : Math.PI / 2;
+        if (this.placeWallRaw(id, x, z, rot, slot)) n++;
+      }
+    }
+    return n;
+  }
+
   // ---------- entities ----------
   teamColor(id) { return this.players[id].color; }
 
@@ -356,7 +449,10 @@ export class Game {
     const g = new THREE.Group();
     let body;
     let rig = null;
-    if (type === 'worker' && this.workerModels) rig = createWorkerRig(this.teamColor(owner));
+    // Cave Man rig drives the workers AND the club/spear troops
+    const CAVEMAN = { worker: 1, brute: 1.16, hunter: 0.94 };
+    const cav = CAVEMAN[type];
+    if (cav && this.workerModels) rig = createWorkerRig(this.teamColor(owner), WORKER_SCALE * cav);
     const mat = new THREE.MeshStandardMaterial({ color: this.teamColor(owner), roughness: 0.6 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
     if (type === 'worker') {
@@ -368,6 +464,27 @@ export class Game {
         const helm = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.5), dark);
         helm.position.y = 1.15; g.add(helm);
       }
+    } else if (type === 'brute') {
+      // club brawler: heavy shoulders, stone maul
+      body = new THREE.Mesh(new THREE.CapsuleGeometry(0.55, 0.6, 4, 10), mat);
+      body.position.y = 0.9;
+      if (rig) body.visible = false;
+      const maul = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 1.5, 6), dark);
+      maul.position.set(0.42, 1.15, 0.5); maul.rotation.x = 0.9; g.add(maul);
+      const knot = new THREE.Mesh(new THREE.IcosahedronGeometry(0.24, 0),
+        new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.9 }));
+      knot.position.set(0.62, 1.72, 0.95); g.add(knot);
+    } else if (type === 'hunter') {
+      // spear thrower: light frame, long reach
+      body = new THREE.Mesh(new THREE.CapsuleGeometry(0.38, 0.8, 4, 10), mat);
+      body.position.y = 0.85;
+      if (rig) body.visible = false;
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.3, 5),
+        new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.9 }));
+      shaft.position.set(0.36, 1.15, 0.55); shaft.rotation.x = Math.PI / 2 - 0.12; g.add(shaft);
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.34, 5),
+        new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.5, metalness: 0.3 }));
+      tip.position.set(0.36, 1.24, 1.7); tip.rotation.x = Math.PI / 2; g.add(tip);
     } else if (type === 'soldier') {
       body = new THREE.Mesh(new THREE.CapsuleGeometry(0.45, 0.7, 4, 10), mat);
       body.position.y = 0.85;
@@ -416,8 +533,8 @@ export class Game {
       g.add(gem);
     }
     g.position.set(x, this.gy(x, z), z);
-    const bar = this.makeHealthBar(type === 'tank' ? 2 : 1.5);
-    bar.position.y = type === 'tank' ? 2.2 : 2.0;
+    const bar = this.makeHealthBar(type === 'tank' || type === 'brute' ? 2 : 1.5);
+    bar.position.y = type === 'tank' || type === 'brute' ? 2.2 : 2.0;
     g.add(bar);
     const ring = this.addSelectionRing(g, st.radius + 0.35, COLORS.select);
     this.scene.add(g);
@@ -434,27 +551,35 @@ export class Game {
     return u;
   }
 
-  spawnBuilding(type, owner, x, z) {
+  spawnBuilding(type, owner, x, z, rot = 0, len) {
     const st = CONFIG.buildings[type];
     const s = st.size;
     const g = new THREE.Group();
     if (type === 'wall') {
-      const block = new THREE.Mesh(new THREE.BoxGeometry(s, 2.0, s),
+      // long, thin, rotatable palisade. len lets fort runs stretch a piece so
+      // walls tile edge-to-edge instead of leaving unit-sized gaps.
+      const L = len ?? s, T = st.thick;
+      const block = new THREE.Mesh(new THREE.BoxGeometry(L, 2.0, T),
         new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.95 }));
       block.position.y = 1.0; block.castShadow = block.receiveShadow = true;
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(s + 0.25, 0.35, s + 0.25),
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(L + 0.25, 0.35, T + 0.25),
         new THREE.MeshStandardMaterial({ color: this.teamColor(owner), emissive: this.teamColor(owner), emissiveIntensity: 0.45 }));
       cap.position.y = 2.1;
       g.add(block, cap);
+      g.rotation.y = rot; // long axis starts along +X, 90deg turns it down +Z
       g.position.set(x, this.gy(x, z), z);
-      const bar = this.makeHealthBar(1.6);
+      const bar = this.makeHealthBar(Math.min(L, 3.2)); // bar tracks a long wall's width
       bar.position.y = 2.9;
       g.add(bar);
-      const ring = this.addSelectionRing(g, s * 0.75 + 0.4, COLORS.select);
+      const ring = this.addWallRing(g, L, T, COLORS.select);
       this.scene.add(g);
       const b = {
         id: UID++, kind: 'building', type, owner, mesh: g, ring, bar,
-        x, z, hp: st.hp, maxHp: st.hp, size: s, radius: s * 0.55, // tight: walls tile edge-to-edge
+        x, z, hp: st.hp, maxHp: st.hp, size: L, rot,
+        // oriented-box footprint: hw along the wall, hd across it. Collision
+        // and pathing use the box, so long walls block like real fortifications.
+        hw: L * 0.5, hd: T * 0.5, rotC: Math.cos(rot), rotS: Math.sin(rot),
+        radius: Math.hypot(L * 0.5, T * 0.5), // bounding radius for broad phase
         queue: [], rallyX: x + 5, rallyZ: z + 5, dead: false,
       };
       this.buildings.push(b);
@@ -849,6 +974,7 @@ export class Game {
       if (k === 'g') this.selectWorkers();
       if (k === 'x') this.stopSelected();
       if (k === 'm') this.setOrderMode(this.pendingOrder === 'move' ? null : 'move');
+      if (k === 'r' && this.placement) this.rotatePlacement(e.shiftKey ? -1 : 1);
       if (k === 'escape') { this.setOrderMode(null); this.cancelPlacement(); this.clearSelection(); }
       // control groups: Shift+1..4 save, 1..4 recall
       if (['1', '2', '3', '4'].includes(k)) {
@@ -1167,19 +1293,90 @@ export class Game {
     return out;
   }
 
+  // ---------- collision footprints ----------
+  // Walls are long thin boxes, everything else is a circle. These two helpers
+  // keep placement, steering and pathfinding honest about a 4.6m-long wall
+  // (a circle collider big enough to matter would seal lanes shut).
+  footprintDist(b, x, z) {
+    if (b.hw === undefined) return Math.hypot(x - b.x, z - b.z) - b.radius;
+    const dx = x - b.x, dz = z - b.z;
+    const lx = dx * b.rotC + dz * b.rotS;      // along the wall
+    const lz = -dx * b.rotS + dz * b.rotC;     // across it
+    const cx = Math.max(-b.hw, Math.min(b.hw, lx));
+    const cz = Math.max(-b.hd, Math.min(b.hd, lz));
+    return Math.hypot(lx - cx, lz - cz);
+  }
+
+  buildingBlocks(b, x, z, pad) {
+    if (b.hw === undefined) {
+      const dx = x - b.x, dz = z - b.z, rr = b.radius + pad;
+      return dx * dx + dz * dz < rr * rr;
+    }
+    return this.footprintDist(b, x, z) < pad;
+  }
+
+  // Do two wall boxes share real area? Wall runs are built to butt up against
+  // each other (fort tiling, keep corners), and a distance test cannot tell
+  // "touching end to end" from "crossing at right angles" - both sit at 0. This
+  // separating-axis test can: touching faces are free, a true overlap is not.
+  wallBoxesOverlap(a, b) {
+    const tol = 0.02;
+    const c = Math.abs(Math.cos((a.rot || 0) - (b.rot || 0)));
+    const s = Math.abs(Math.sin((a.rot || 0) - (b.rot || 0)));
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const ax = dx * a.rotC + dz * a.rotS, az = -dx * a.rotS + dz * a.rotC;
+    if (Math.abs(ax) >= a.hw + b.hw * c + b.hd * s - tol) return false;
+    if (Math.abs(az) >= a.hd + b.hw * s + b.hd * c - tol) return false;
+    const bx = ax * a.rotC - az * a.rotS, bz = ax * a.rotS + az * a.rotC;
+    if (Math.abs(bx) >= b.hw + a.hw * c + a.hd * s - tol) return false;
+    if (Math.abs(bz) >= b.hd + a.hw * s + a.hd * c - tol) return false;
+    return true;
+  }
+
+  // a long wall also has to clear the space its ENDS sweep into
+  wallSpotFree(x, z, rot, len) {
+    const st = CONFIG.buildings.wall;
+    const L = len ?? st.size, h = L * 0.5 * 0.78;
+    const ax = Math.cos(rot) * h, az = Math.sin(rot) * h;
+    const cand = { x, z, rot, hw: L * 0.5, hd: st.thick * 0.5, rotC: Math.cos(rot), rotS: Math.sin(rot) };
+    for (const [px, pz] of [[x, z], [x + ax, z + az], [x - ax, z - az]]) {
+      if (!this.spotClearOfWorld(px, pz, 0.4)) return false;
+      let blocked = false;
+      this.eachBuildingNear(px, pz, 7, (b) => {
+        if (b.hw === undefined && this.buildingBlocks(b, px, pz, 0.4)) { blocked = true; return false; }
+      });
+      if (blocked) return false;
+    }
+    // only walls get the overlap test, so runs can share a face
+    let hit = false;
+    this.eachBuildingNear(x, z, 9, (b) => {
+      if (b.hw !== undefined && this.wallBoxesOverlap(cand, b)) { hit = true; return false; }
+    });
+    return !hit;
+  }
+
   isSpotFree(x, z, radius, ignoreUnit) {
     const H = CONFIG.mapSize / 2 - 1.5;
     if (Math.abs(x) > H || Math.abs(z) > H) return false;
-    if (this.terrain && this.terrain.blocked(x, z)) return false; // river / mountain
     let blocked = false;
     this.eachBuildingNear(x, z, radius + 7, (b) => {
-      if (Math.hypot(x - b.x, z - b.z) < b.radius + radius) { blocked = true; return false; }
+      if (this.buildingBlocks(b, x, z, radius)) { blocked = true; return false; }
     });
     if (blocked) return false;
+    return this.spotClearOfWorld(x, z, radius, ignoreUnit);
+  }
+
+  // map bounds, river/mountain, boulders, standing trees, units - everything
+  // that is not a building
+  spotClearOfWorld(x, z, radius, ignoreUnit) {
+    const H = CONFIG.mapSize / 2 - 1.5;
+    if (Math.abs(x) > H || Math.abs(z) > H) return false;
+    if (this.terrain && this.terrain.blocked(x, z)) return false; // river / mountain
     for (const o of this.obstacles) {
       if (Math.hypot(x - o.x, z - o.z) < o.r + radius) return false;
     }
     // standing harvestable trees block placement (grid query: ~1000 trees)
+    let blocked = false;
     this.eachResourceNear(x, z, radius + 2.5, (r) => {
       if (!this.resourceReady(r)) return;
       if (Math.hypot(x - r.x, z - r.z) < r.radius + 0.2 + radius) { blocked = true; return false; }
@@ -1212,35 +1409,60 @@ export class Game {
     const cost = type === 'turret' ? CONFIG.turretCost : type === 'wall' ? CONFIG.wallCost : CONFIG.barracksCost;
     const name = type === 'turret' ? 'Defense Turret' : type === 'wall' ? 'Wall' : 'Barracks';
     if (this.players[this.humanId].logs < cost) { this.hookMsg(`Need ${cost} logs for ${name}`); return; }
+    const st = CONFIG.buildings[type];
+    const size = st.size;
     const ghostMat = new THREE.MeshBasicMaterial({ color: 0x4ade80, transparent: true, opacity: 0.4, depthWrite: false });
-    const size = CONFIG.buildings[type].size;
-    const ghost = type === 'turret'
-      ? new THREE.Mesh(new THREE.CylinderGeometry(size * 0.45, size * 0.5, 1.6, 8), ghostMat)
-      : new THREE.Mesh(new THREE.BoxGeometry(size, 2, size), ghostMat);
+    // gizmo group carries the yaw so ghost + footprint ring rotate together
+    const gizmo = new THREE.Group();
+    let ghost, ringR;
+    if (type === 'turret') {
+      ghost = new THREE.Mesh(new THREE.CylinderGeometry(size * 0.45, size * 0.5, 1.6, 8), ghostMat);
+      ringR = size * 0.6;
+    } else if (type === 'wall') {
+      ghost = new THREE.Mesh(new THREE.BoxGeometry(size, 2, st.thick), ghostMat);
+      ringR = size * 0.5;
+    } else {
+      ghost = new THREE.Mesh(new THREE.BoxGeometry(size, 2, size), ghostMat);
+      ringR = size * 0.6;
+    }
     ghost.position.y = 1;
-    this.scene.add(ghost);
-    const ring = new THREE.Mesh(new THREE.RingGeometry(size * 0.6, size * 0.6 + 0.3, 40),
+    const ring = new THREE.Mesh(new THREE.RingGeometry(ringR, ringR + 0.3, 40),
       new THREE.MeshBasicMaterial({ color: 0x4ade80, transparent: true, side: THREE.DoubleSide }));
     ring.rotation.x = -Math.PI / 2; ring.position.y = 0.08;
-    this.scene.add(ring);
-    this.placement = { type, ghost, ring, x: this.camTarget.x, z: this.camTarget.z, valid: false };
+    if (type === 'wall') ring.scale.set(1, st.thick / size, 1); // squash depth: long thin footprint
+    gizmo.add(ghost, ring);
+    this.scene.add(gizmo);
+    this.placement = { type, gizmo, ghost, ring, rot: 0, x: this.camTarget.x, z: this.camTarget.z, valid: false };
     this.setOrderMode(null);
     this.hookMsg(type === 'turret'
       ? 'Placing Turret — tap green ground (right-click / Esc cancels). Turrets auto-defend an area.'
       : type === 'wall'
-      ? 'Placing Wall — click/tap to chain segments, Esc/right-click when done. Cheap, blocks paths & bullets (units chew through).'
+      ? 'Placing Wall — tap to chain segments, R or ⟳ rotates 90°, ✕ when done.'
       : 'Placing Barracks — tap green ground (right-click / Esc cancels). Extra Barracks = +supply & faster training.');
+  }
+
+  // walls snap to 90° so runs stay straight; anything else ignores rotation
+  rotatePlacement(dir = 1) {
+    const pl = this.placement;
+    if (!pl || pl.type !== 'wall') return false;
+    pl.rot += Math.PI / 2 * (dir > 0 ? 1 : -1);
+    pl.rot = ((pl.rot % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    pl.gizmo.rotation.y = pl.rot; // flip the preview now, not on the next move
+    this.hookMsg(`Wall rotated ${Math.round((pl.rot * 180) / Math.PI)}°`);
+    return true;
   }
 
   updateGhost(x, z) {
     const pl = this.placement;
     if (!pl) return;
-    const size = CONFIG.buildings[pl.type].size;
-    const r = size * (pl.type === 'wall' ? 0.55 : 0.72);
-    const ok = this.isSpotFree(THREE.MathUtils.clamp(x, -this.mapBound(6), this.mapBound(6)), THREE.MathUtils.clamp(z, -this.mapBound(6), this.mapBound(6)), r);
-    pl.x = THREE.MathUtils.clamp(x, -this.mapBound(6), this.mapBound(6)); pl.z = THREE.MathUtils.clamp(z, -this.mapBound(6), this.mapBound(6)); pl.valid = ok;
-    pl.ghost.position.set(pl.x, this.gy(pl.x, pl.z) + 1, pl.z);
-    pl.ring.position.set(pl.x, this.gy(pl.x, pl.z) + 0.15, pl.z);
+    const cx = THREE.MathUtils.clamp(x, -this.mapBound(6), this.mapBound(6));
+    const cz = THREE.MathUtils.clamp(z, -this.mapBound(6), this.mapBound(6));
+    const ok = pl.type === 'wall'
+      ? this.wallSpotFree(cx, cz, pl.rot)
+      : this.isSpotFree(cx, cz, CONFIG.buildings[pl.type].size * 0.72);
+    pl.x = cx; pl.z = cz; pl.valid = ok;
+    pl.gizmo.position.set(cx, this.gy(cx, cz), cz);
+    pl.gizmo.rotation.y = pl.rot;
     pl.ghost.material.color.set(ok ? 0x4ade80 : 0xef4444);
     pl.ring.material.color.set(ok ? 0x4ade80 : 0xef4444);
   }
@@ -1252,13 +1474,14 @@ export class Game {
     if (!pl.valid) { this.hookMsg('Cannot build here — find open ground'); return; }
     let b = null;
     if (pl.type === 'turret') b = this.buildTurret(this.humanId, pl.x, pl.z);
-    else if (pl.type === 'wall') b = this.buildWall(this.humanId, pl.x, pl.z);
+    else if (pl.type === 'wall') b = this.buildWall(this.humanId, pl.x, pl.z, pl.rot);
     else b = this.buildBarracks(this.humanId, pl.x, pl.z);
     if (b) { b.rallyX = pl.x + 5; b.rallyZ = pl.z + 5; }
     // walls chain: keep ghost alive so players can drag a wall line quickly
     if (pl.type === 'wall') {
       if (this.players[this.humanId].logs < CONFIG.wallCost) { this.cancelPlacement(); return; }
-      this.updateGhost(pl.x + CONFIG.buildings.wall.size + 0.1, pl.z);
+      const L = CONFIG.buildings.wall.size + 0.05;
+      this.updateGhost(pl.x + Math.cos(pl.rot) * L, pl.z + Math.sin(pl.rot) * L);
       return;
     }
     this.cancelPlacement();
@@ -1266,7 +1489,7 @@ export class Game {
 
   cancelPlacement() {
     if (!this.placement) return;
-    this.scene.remove(this.placement.ghost, this.placement.ring);
+    this.scene.remove(this.placement.gizmo);
     this.placement = null;
   }
 
@@ -1315,11 +1538,11 @@ export class Game {
 
   // ---------- orders from UI ----------
   unitCost(type) {
-    return { worker: CONFIG.workerCost, soldier: CONFIG.soldierCost, tank: CONFIG.tankCost, scout: CONFIG.scoutCost, artillery: CONFIG.artilleryCost }[type] ?? 100;
+    return { worker: CONFIG.workerCost, soldier: CONFIG.soldierCost, brute: CONFIG.bruteCost, hunter: CONFIG.hunterCost, tank: CONFIG.tankCost, scout: CONFIG.scoutCost, artillery: CONFIG.artilleryCost }[type] ?? 100;
   }
   canTrain(building, type) {
     if (building.type === 'hq') return type === 'worker';
-    if (building.type === 'barracks') return ['soldier', 'tank', 'scout', 'artillery'].includes(type);
+    if (building.type === 'barracks') return ['soldier', 'brute', 'hunter', 'tank', 'scout', 'artillery'].includes(type);
     return false;
   }
   trainUnit(building, type) {
@@ -1358,15 +1581,22 @@ export class Game {
     return b;
   }
 
-  buildWall(owner, x, z) {
+  // no messages, no selection: used by the AI and the starter keeps
+  placeWallRaw(owner, x, z, rot = 0, len) {
+    const p = this.players[owner];
+    if (p.logs < CONFIG.wallCost) return null;
+    if (!this.wallSpotFree(x, z, rot, len)) return null;
+    p.logs -= CONFIG.wallCost;
+    return this.spawnBuilding('wall', owner, x, z, rot, len);
+  }
+
+  buildWall(owner, x, z, rot = 0, len) {
     const st = this.players[owner];
     if (st.logs < CONFIG.wallCost) { if (owner === this.humanId) this.hookMsg(`Need ${CONFIG.wallCost} logs for Wall`); return null; }
     x = THREE.MathUtils.clamp(x ?? this.camTarget.x + 6, -this.mapBound(6), this.mapBound(6));
     z = THREE.MathUtils.clamp(z ?? this.camTarget.z + 6, -this.mapBound(6), this.mapBound(6));
-    const r = CONFIG.buildings.wall.size * 0.55;
-    if (!this.isSpotFree(x, z, r)) { if (owner === this.humanId) this.hookMsg('Cannot build wall here — blocked'); return null; }
-    st.logs -= CONFIG.wallCost;
-    const b = this.spawnBuilding('wall', owner, x, z);
+    const b = this.placeWallRaw(owner, x, z, rot, len);
+    if (!b) { if (owner === this.humanId) this.hookMsg('Cannot build wall here — blocked'); return null; }
     // don't steal selection when chaining walls
     if (owner === this.humanId && this.placement?.type !== 'wall') this.setSelection([b]);
     else if (owner === this.humanId) this.hooks.onSelect?.(this.selected);
@@ -1549,10 +1779,20 @@ export class Game {
     const c = 8, H = CONFIG.mapSize / 2, map = new Map();
     for (const b of this.buildings) {
       if (b.dead) continue;
-      const k = Math.floor((b.x + H) / c) * 1000 + Math.floor((b.z + H) / c);
-      let a = map.get(k);
-      if (!a) { a = []; map.set(k, a); }
-      a.push(b);
+      // long walls span more than one cell: register every cell the box covers,
+      // so short-range queries can never miss a wall end
+      const ex = b.hw === undefined ? b.radius : Math.abs(b.hw * b.rotC) + Math.abs(b.hd * b.rotS);
+      const ez = b.hw === undefined ? b.radius : Math.abs(b.hw * b.rotS) + Math.abs(b.hd * b.rotC);
+      const ix0 = Math.floor((b.x - ex + H) / c), ix1 = Math.floor((b.x + ex + H) / c);
+      const iz0 = Math.floor((b.z - ez + H) / c), iz1 = Math.floor((b.z + ez + H) / c);
+      for (let ix = ix0; ix <= ix1; ix++) {
+        for (let iz = iz0; iz <= iz1; iz++) {
+          const k = ix * 1000 + iz;
+          let a = map.get(k);
+          if (!a) { a = []; map.set(k, a); }
+          a.push(b);
+        }
+      }
     }
     this._bg = map; this._bgVer = this.colliderVersion; this._bgCell = c;
     return map;
@@ -1562,11 +1802,17 @@ export class Game {
     const map = this.buildingGrid(), c = this._bgCell, H = CONFIG.mapSize / 2;
     const ix0 = Math.floor((x - r + H) / c), ix1 = Math.floor((x + r + H) / c);
     const iz0 = Math.floor((z - r + H) / c), iz1 = Math.floor((z + r + H) / c);
+    // a wall sits in several cells now, so stamp each visit to visit it once
+    const stamp = (this._bgStamp = (this._bgStamp || 0) + 1);
     for (let ix = ix0; ix <= ix1; ix++) {
       for (let iz = iz0; iz <= iz1; iz++) {
         const a = map.get(ix * 1000 + iz);
         if (!a) continue;
-        for (const b of a) { if (!b.dead && cb(b) === false) return; }
+        for (const b of a) {
+          if (b.dead || b._bgSeen === stamp) continue;
+          b._bgSeen = stamp;
+          if (cb(b) === false) return;
+        }
       }
     }
   }
@@ -2028,6 +2274,21 @@ export class Game {
         // here used to cost units x buildings every frame
         this.eachBuildingNear(u.x, u.z, 7, (b) => {
           const dx = u.x - b.x, dz = u.z - b.z;
+          if (b.hw !== undefined) {
+            // long wall: shove out of the box along the shortest local face
+            const lx = dx * b.rotC + dz * b.rotS, lz = -dx * b.rotS + dz * b.rotC;
+            const ex = b.hw + u.radius, ez = b.hd + u.radius;
+            const ox = Math.max(-ex, Math.min(ex, lx));
+            const oz = Math.max(-ez, Math.min(ez, lz));
+            let px = lx - ox, pz = lz - oz;
+            let d = Math.hypot(px, pz);
+            if (d > 0.0001) { px /= d; pz /= d; }
+            else if (Math.abs(lx) / ex > Math.abs(lz) / ez) { px = Math.sign(lx) || 1; pz = 0; }
+            else { px = 0; pz = Math.sign(lz) || 1; }
+            u.x = b.x + (px * b.rotC - pz * b.rotS);
+            u.z = b.z + (px * b.rotS + pz * b.rotC);
+            return;
+          }
           const rr = b.radius + u.radius;
           // cheap reject before sqrt
           if (Math.abs(dx) > rr || Math.abs(dz) > rr) return;
@@ -2041,8 +2302,8 @@ export class Game {
     }
   }
 
-  // ================= PATHFINDING (A* on a 4m grid + LOS smoothing) =================
-  pathCell() { return 4; }
+  // ================= PATHFINDING (A* on a 3m grid + LOS smoothing) =================
+  pathCell() { return 3; }
   pathN() { return Math.ceil(CONFIG.mapSize / this.pathCell()); }
 
   pointBlocked(x, z, r) {
@@ -2052,8 +2313,8 @@ export class Game {
     const m = r * 0.3 + 0.35;
     let hit = false;
     this.eachBuildingNear(x, z, 7, (b) => {
-      const dx = x - b.x, dz = z - b.z, rr = b.radius + m;
-      if (dx * dx + dz * dz < rr * rr) { hit = true; return false; }
+      // thin long walls get an inflated pad so no lane leaks between segments
+      if (this.buildingBlocks(b, x, z, b.hw === undefined ? m : m + 0.45)) { hit = true; return false; }
     });
     if (hit) return true;
     for (const o of this.obstacles) {
@@ -2120,16 +2381,47 @@ export class Game {
       const dx = Math.abs(ax - bx), dz = Math.abs(az - bz);
       return Math.max(dx, dz) + 0.4142 * Math.min(dx, dz);
     };
-    const open = [[oct(six, siz, tix, tiz), idx(six, siz)]];
+    // binary-heap open set: the finer 3m grid (needed so a 1m-thin wall can
+    // never be slipped through) pops far more nodes than the old 4m grid, and
+    // the previous linear "scan for the min" was the real bottleneck
+    const hF = [], hI = [];
+    const hPush = (f, i) => {
+      hF.push(f); hI.push(i);
+      let c = hF.length - 1;
+      while (c > 0) {
+        const p = (c - 1) >> 1;
+        if (hF[p] <= hF[c]) break;
+        const tf = hF[p]; hF[p] = hF[c]; hF[c] = tf;
+        const ti = hI[p]; hI[p] = hI[c]; hI[c] = ti;
+        c = p;
+      }
+    };
+    const hPop = () => {
+      const top = hI[0], lf = hF.pop(), li = hI.pop();
+      if (hF.length) {
+        hF[0] = lf; hI[0] = li;
+        let c = 0;
+        for (;;) {
+          const l = c * 2 + 1, r = l + 1;
+          let s = c;
+          if (l < hF.length && hF[l] < hF[s]) s = l;
+          if (r < hF.length && hF[r] < hF[s]) s = r;
+          if (s === c) break;
+          const tf = hF[s]; hF[s] = hF[c]; hF[c] = tf;
+          const ti = hI[s]; hI[s] = hI[c]; hI[c] = ti;
+          c = s;
+        }
+      }
+      return top;
+    };
+    hPush(oct(six, siz, tix, tiz), idx(six, siz));
     const came = new Map();
     const gs = new Map([[idx(six, siz), 0]]);
     const closed = new Set();
     const DIRS = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.4142], [1, -1, 1.4142], [-1, 1, 1.4142], [-1, -1, 1.4142]];
     let found = false, iter = 0;
-    while (open.length && iter++ < 1200) {
-      let bi = 0;
-      for (let i = 1; i < open.length; i++) if (open[i][0] < open[bi][0]) bi = i;
-      const [, cur] = open.splice(bi, 1)[0];
+    while (hF.length && iter++ < 2600) {
+      const cur = hPop();
       if (closed.has(cur)) continue;
       closed.add(cur);
       const cx = cur % N, cz = Math.floor(cur / N);
@@ -2145,7 +2437,7 @@ export class Game {
         if (ng < (gs.get(ni) ?? Infinity)) {
           gs.set(ni, ng);
           came.set(ni, cur);
-          open.push([ng + oct(nx, nz, tix, tiz), ni]);
+          hPush(ng + oct(nx, nz, tix, tiz), ni);
         }
       }
     }
@@ -2212,9 +2504,8 @@ export class Game {
       // spatial-hash query: a full building scan here cost units x buildings per frame
       let hit = false;
       this.eachBuildingNear(px, pz, 6, (b) => {
-        const ddx = px - b.x, ddz = pz - b.z, rr = b.radius + ur;
-        if (Math.abs(ddx) > rr || Math.abs(ddz) > rr) return;
-        if (ddx * ddx + ddz * ddz < rr * rr) { hit = true; return false; }
+        // footprint-aware: a long wall must not behave like a fat circle
+        if (this.buildingBlocks(b, px, pz, ur)) { hit = true; return false; }
       });
       if (hit) return true;
       for (const o of this.obstacles) {

@@ -22,10 +22,10 @@ const rand = (a, b) => a + Math.random() * (b - a);
 const randInt = (a, b) => Math.floor(rand(a, b + 1));
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-const WALL_R = () => CONFIG.buildings.wall.size * 0.55;
+const WALL_R = () => CONFIG.buildings.wall.size * 0.5; // half-length of a wall piece
 const TURRET_R = () => CONFIG.buildings.turret.size * 0.72;
 const RAX_R = () => CONFIG.buildings.barracks.size * 0.72;
-const TOWER_CLEAR = () => TURRET_R() + WALL_R() + 0.05; // wall centre must be this far from a tower
+const TOWER_CLEAR = () => TURRET_R() + WALL_R() + 0.05; // wall end must clear a tower
 
 // sides: 0 = N (-z), 1 = E (+x), 2 = S (+z), 3 = W (-x)
 const INWARD = [{ x: 0, z: 1 }, { x: -1, z: 0 }, { x: 0, z: -1 }, { x: 1, z: 0 }];
@@ -160,11 +160,14 @@ export class KingdomBrain {
     const pcStart = pc(gates[0].side, gates[0].off);
 
     // ---- walls: continuous runs between corner towers, open at the gates ----
+    // Each piece takes the exact slot length so runs tile edge-to-edge, and
+    // the long axis follows the side (rot 0 along X, 90deg along Z).
     const clear = TOWER_CLEAR();
     const walls = [];
     for (let s = 0; s < 4; s++) {
       const h = half(s);
       const lo0 = -h + clear, hi0 = h - clear;
+      const rot = (s === 0 || s === 2) ? 0 : Math.PI / 2;
       const gate = gates.find(q => q.side === s);
       const runs = gate
         ? [[lo0, gate.off - gw / 2], [gate.off + gw / 2, hi0]]
@@ -172,15 +175,13 @@ export class KingdomBrain {
       for (const [lo, hi] of runs) {
         if (hi < lo) continue;
         const L = hi - lo;
-        if (L < A.wallStep) {
-          const t = (lo + hi) / 2, p = pt(s, t);
-          walls.push({ x: p.x, z: p.z, pc: pc(s, t), b: null, retryAt: 0 });
-          continue;
-        }
-        const k = Math.floor(L / A.wallStep);
-        for (let i = 0; i <= k; i++) {
-          const t = lo + (L * i) / k, p = pt(s, t);
-          walls.push({ x: p.x, z: p.z, pc: pc(s, t), b: null, retryAt: 0 });
+        // pieces sit at run CENTRES and stretch to the slot, so a run covers
+        // [lo, hi] exactly: gates stay gw wide and towers stay clear
+        const segs = L < A.wallStep * 0.5 ? 1 : Math.max(1, Math.round(L / A.wallStep));
+        const slot = L / segs;
+        for (let i = 0; i < segs; i++) {
+          const t = lo + slot * (i + 0.5), p = pt(s, t);
+          walls.push({ x: p.x, z: p.z, rot, len: slot, pc: pc(s, t), b: null, retryAt: 0 });
         }
       }
     }
@@ -292,7 +293,7 @@ export class KingdomBrain {
   }
 
   buildNextWalls(n, reserve) {
-    const g = this.game, id = this.owner, P = g.players[id], now = g.time, r = WALL_R();
+    const g = this.game, id = this.owner, P = g.players[id], now = g.time;
     let built = 0;
     for (const w of this.walls) {
       if (built >= n) break;
@@ -300,8 +301,8 @@ export class KingdomBrain {
       if (w.b && !w.b.dead) continue;
       w.b = null;                       // destroyed in a siege → rebuild it
       if (w.retryAt > now) continue;
-      if (!g.isSpotFree(w.x, w.z, r)) { w.retryAt = now + 10 + Math.random() * 10; continue; }
-      const b = g.buildWall(id, w.x, w.z);
+      if (!g.wallSpotFree(w.x, w.z, w.rot, w.len)) { w.retryAt = now + 10 + Math.random() * 10; continue; }
+      const b = g.placeWallRaw(id, w.x, w.z, w.rot, w.len);
       if (b) { w.b = b; built++; } else w.retryAt = now + 15;
     }
     return built;
@@ -328,6 +329,9 @@ export class KingdomBrain {
     const roll = Math.random();
     if (g.time > 420 && have('tank') < Math.ceil(P.tankShare * P.wantArmy) && roll < 0.5) return 'tank';
     if (g.time > 540 && have('artillery') < Math.ceil(P.artShare * P.wantArmy) && roll < 0.4) return 'artillery';
+    // caveman troops: brutes lead assaults, hunters screen from behind
+    if (g.time > 150 && have('brute') < Math.ceil(0.3 * P.wantArmy) && roll < 0.42) return 'brute';
+    if (g.time > 210 && have('hunter') < Math.ceil(0.35 * P.wantArmy) && roll < 0.5) return 'hunter';
     return 'soldier';
   }
 

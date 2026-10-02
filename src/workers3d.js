@@ -145,22 +145,23 @@ function prepareVariant(gltf) {
 }
 
 // Returns null until loadWorkerModels() has resolved (game falls back to boxes).
-export function createWorkerRig(colorHex) {
+// scale lets the same Cave Man rig serve workers, club brutes and spear hunters.
+export function createWorkerRig(colorHex, scale = WORKER_SCALE) {
   if (!LIB) return null;
   const v = LIB.variants[LIB.next++ % LIB.variants.length];
   const model = skeletonClone(v.scene);
   const body = model.getObjectByName(v.bodyName);
   if (body) body.material = dressMaterial(colorHex);
   model.traverse((o) => { if (o.isSkinnedMesh && o !== body) o.material = LIB.propMat; });
-  model.scale.setScalar(WORKER_SCALE);
+  model.scale.setScalar(scale);
 
   const root = new THREE.Group();
-  root.position.y = v.lift;
+  root.position.y = v.lift * (scale / WORKER_SCALE);
   root.add(model);
 
   const rig = {
     root,
-    lift: v.lift,
+    lift: v.lift * (scale / WORKER_SCALE),
     phase: Math.random() * Math.PI * 2,
     walkW: 0,
     bones: WALK_BONES.map((n) => model.getObjectByName(n)),

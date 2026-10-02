@@ -7,6 +7,8 @@ const UNIT_META = {
   tank: { name: 'Tank', icon: 'tank', cost: () => CONFIG.tankCost, desc: 'Heavy armor' },
   scout: { name: 'Scout', icon: 'scout', cost: () => CONFIG.scoutCost, desc: 'Fast, huge sight' },
   artillery: { name: 'Artillery', icon: 'artillery', cost: () => CONFIG.artilleryCost, desc: 'Long-range splash' },
+  brute: { name: 'Brute', icon: 'brute', cost: () => CONFIG.bruteCost, desc: 'Caveman club brawler' },
+  hunter: { name: 'Hunter', icon: 'hunter', cost: () => CONFIG.hunterCost, desc: 'Caveman spear thrower' },
 };
 const BLD_META = {
   barracks: { name: 'Barracks', icon: 'barracks', cost: () => CONFIG.barracksCost },
@@ -34,6 +36,7 @@ export class HUD {
     this.elFeed = document.getElementById('message-feed');
     this.banner = document.getElementById('order-banner');
     this.bannerText = document.getElementById('order-banner-text');
+    this.elRotate = document.getElementById('order-rotate');
     this.elRank = document.getElementById('rank-text');
     this.elSelCount = document.getElementById('sel-count');
     this.lastCrystal = null;
@@ -71,6 +74,12 @@ export class HUD {
       game.setOrderMode(null);
       game.cancelPlacement?.();
       this.syncBanner();
+      buzz(8);
+    };
+    // rotate the wall ghost: 90° a tap, on-screen for phones, R for desktop
+    if (this.elRotate) this.elRotate.onclick = (e) => {
+      e.stopPropagation();
+      game.rotatePlacement?.(1);
       buzz(8);
     };
     document.getElementById('btn-focus').onclick = () => { game.focusSelection?.(); buzz(8); };
@@ -158,11 +167,13 @@ export class HUD {
 
   syncBanner() {
     const m = this.game.pendingOrder;
+    const placingWall = this.game.placement?.type === 'wall';
+    if (this.elRotate) this.elRotate.classList.toggle('hidden', !placingWall);
     if (!m && !this.game.placement) { this.banner.classList.add('hidden'); return; }
     this.banner.classList.remove('hidden');
     this.bannerText.textContent = this.game.placement
       ? (this.game.placement.type === 'turret' ? 'Placing Turret — tap green ground'
-        : this.game.placement.type === 'wall' ? 'Placing Wall — tap to chain, ✕ when done'
+        : this.game.placement.type === 'wall' ? 'Placing Wall — tap to chain, ⟳ / R rotates'
         : 'Placing Barracks — tap green ground')
       : m === 'move' ? 'MOVE — tap anywhere'
       : m === 'attack' ? 'ATTACK — tap a visible enemy'
@@ -350,7 +361,7 @@ export class HUD {
         ap(this.actBtn('turret', 'Turret', 'auto-defense', () => g.startPlacement('turret'), CONFIG.turretCost));
         ap(this.actBtn('wall', 'Wall', 'chain-place blocker', () => g.startPlacement('wall'), CONFIG.wallCost));
       } else if (single.type === 'barracks') {
-        for (const t of ['soldier', 'scout', 'tank', 'artillery']) ap(this.trainBtn(single, t));
+        for (const t of ['soldier', 'brute', 'hunter', 'scout', 'tank', 'artillery']) ap(this.trainBtn(single, t));
         ap(this.actBtn('wall', 'Wall', 'wall off chokes', () => g.startPlacement('wall'), CONFIG.wallCost));
       } else if (single.type === 'wall') {
         const hint = document.createElement('div');
