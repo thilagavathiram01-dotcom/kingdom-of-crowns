@@ -374,69 +374,34 @@ export class Game {
 
   initMap() {
     const H = CONFIG.mapSize / 2;
-    // one HQ + barracks + small starters per kingdom (rise, don't rush)
+    // one HQ + barracks + small starters per kingdom (rise, don't rush).
+    // No automatic walls: every kingdom starts in the open so armies, workers
+    // and AI expansion never get trapped behind their own palisade. Players
+    // who want walls place them by hand with the Wall command.
     this.kingdomIds().forEach((id, i) => {
       const s = this.kingdomSpawns[i];
       const hq = this.spawnBuilding('hq', id, s.x, s.z);
-      const bx = THREE.MathUtils.clamp(s.x + 6, -H + 6, H - 6);
+      const raxR = CONFIG.buildings.barracks.size * 0.72;
+      const off = hq.radius + raxR + 2.5; // breathing room: never overlap the HQ
+      const bx = THREE.MathUtils.clamp(s.x + off, -H + 6, H - 6);
       const bz = THREE.MathUtils.clamp(s.z + 1, -H + 6, H - 6);
-      this.spawnBuilding('barracks', id, this.isSpotFree(bx, bz, 3.2) ? bx : s.x - 6, bz);
+      const fx = THREE.MathUtils.clamp(s.x - off, -H + 6, H - 6);
+      this.spawnBuilding('barracks', id,
+        this.isSpotFree(bx, bz, raxR + 0.5) ? bx : fx,
+        this.isSpotFree(bx, bz, raxR + 0.5) ? bz : s.z + 1);
       for (let k = 0; k < 3; k++) this.spawnUnit('worker', id, s.x + 3 + k * 1.5, s.z + 5);
       this.spawnUnit('soldier', id, s.x + 3, s.z + 8);
       this.spawnUnit('scout', id, s.x + 5, s.z + 8);
       this.spawnUnit('brute', id, s.x - 2, s.z + 7.5);
-      // every kingdom starts behind its own palisade, one gate facing the woods
-      this.buildStarterKeep(id, s.x, s.z);
     });
 
-    // timber economy: EVERY terrain tree is harvestable. Workers seek the
-    // nearest standing tree anywhere on the continent and chop logs from it.
-    // Nothing is planted near bases; chopped trees shrink to stumps and grow
-    // back, so logs never run out. (No crystals anywhere.)
+    // timber economy: EVERY terrain tree is harvestable. Workers only chop
+    // when ordered (tap a tree with workers selected); otherwise they stand
+    // idle. Chopped trees shrink to stumps and grow back, so logs never run out.
     this.buildForestResources(this.waterFx?.trees || []);
 
     this.hookMsg(`War of Crowns — ${CONFIG.kingdoms} kingdoms, a ~1 hour saga. Rise in peace, then dominate them all!`);
     this.updateFog();
-  }
-
-  // Every kingdom opens behind a palisade: a square run of long wall segments
-  // with one gate aimed at the nearest grove, so early raids have to chew
-  // timber before they reach the HQ (and the economy never breaks its own wall).
-  buildStarterKeep(id, cx, cz) {
-    const { keepHalf: half, keepGate: gw } = CONFIG.walls;
-    const st = CONFIG.buildings.wall;
-    const hd = st.thick * 0.5;
-    let bd = 1e9, tx = cx, tz = cz + 1;
-    for (const t of (this.waterFx?.trees || [])) {
-      if (Math.abs(t.x - cx) < half + 3 && Math.abs(t.z - cz) < half + 3) continue;
-      const d = Math.hypot(t.x - cx, t.z - cz);
-      if (d < bd) { bd = d; tx = t.x; tz = t.z; }
-    }
-    const dx = tx - cx, dz = tz - cz;
-    const east = Math.abs(dx) > Math.abs(dz);
-    const side = east ? (dx > 0 ? 1 : 3) : (dz > 0 ? 2 : 0);
-    const off = THREE.MathUtils.clamp(east ? dz : dx, -(half - gw / 2 - 1), half - gw / 2 - 1);
-    const span = half - hd; // sides stop short of the corner: pieces meet, never overlap
-    const runs = [];
-    for (let s = 0; s < 4; s++) {
-      if (s === side) runs.push([s, -span, off - gw / 2], [s, off + gw / 2, span]);
-      else runs.push([s, -span, span]);
-    }
-    let n = 0;
-    for (const [s, lo, hi] of runs) {
-      const run = hi - lo;
-      if (run < 1.4) continue;
-      const segs = Math.max(1, Math.round(run / st.size));
-      const slot = run / segs; // elastic walls: each piece fills its slot exactly
-      for (let i = 0; i < segs; i++) {
-        const t = lo + slot * (i + 0.5);
-        const x = s === 1 ? cx + half : s === 3 ? cx - half : cx + t;
-        const z = s === 0 ? cz - half : s === 2 ? cz + half : cz + t;
-        const rot = s === 0 || s === 2 ? 0 : Math.PI / 2;
-        if (this.placeWallRaw(id, x, z, rot, slot)) n++;
-      }
-    }
-    return n;
   }
 
   // ---------- entities ----------
@@ -1241,7 +1206,7 @@ export class Game {
   orderHarvest(workers, node) {
     for (const u of workers) {
       u.harvestTarget = node; u.target = null; u.objective = null; u.returning = false;
-      u.hasOrder = true; u.gathering = 0; u.idleT = 0; u.path = null; u.fireAnchor = null; u.holdPosition = false;
+      u.hasOrder = true; u.harvestManual = true; u.gathering = 0; u.idleT = 0; u.path = null; u.fireAnchor = null; u.holdPosition = false;
       // if already full, go drop off first
       if (u.carrying >= (CONFIG.resource?.carryMax ?? 10)) { const hq = this.hqOf(u.owner); if (hq) { u.returning = true; u.tx = hq.x; u.tz = hq.z; } }
     }
@@ -1619,7 +1584,7 @@ export class Game {
     this.camTarget.set(s.x, 0, s.z);
   }
   stopSelected() {
-    for (const u of this.selected) if (u.kind === 'unit' && !u.dead) { u.hasOrder = false; u.attackMove = false; u.target = null; u.objective = null; u.harvestTarget = null; u.returning = false; u.dropX = null; u.dropZ = null; u.dropFor = null; u.idleT = 0; u.path = null; u.tx = u.x; u.tz = u.z; u.holdPosition = true; u.fireAnchor = null; }
+    for (const u of this.selected) if (u.kind === 'unit' && !u.dead) { u.hasOrder = false; u.attackMove = false; u.target = null; u.objective = null; u.harvestTarget = null; u.harvestManual = false; u.returning = false; u.dropX = null; u.dropZ = null; u.dropFor = null; u.idleT = 0; u.path = null; u.tx = u.x; u.tz = u.z; u.holdPosition = true; u.fireAnchor = null; }
     this.hookMsg('Holding position');
   }
 
@@ -2221,7 +2186,8 @@ export class Game {
       u.path = null; u.repathT = 0;
     }
 
-    // WORKER harvesting — continuous log runs: chop, haul to HQ, repeat.
+    // WORKER harvesting — manual log runs: chop the assigned tree, haul to HQ,
+    // then stand idle. Workers never auto-seek trees on their own.
     // Trees shrink as they are chopped and regrow from a stump, so logging never ends.
     const CARRY = CONFIG.resource?.carryMax ?? 10;
     if (u.type === 'worker' && u.harvestTarget && this.resourceReady(u.harvestTarget) && u.carrying < CARRY) {
@@ -2237,32 +2203,39 @@ export class Game {
         this.burst(n.x, this.gy(n.x, n.z) + 1.5, n.z, 0x8b5a2b, 5, 2.5);
         this.burst(n.x, this.gy(n.x, n.z) + 2.4, n.z, 0x4ade80, 4, 2);
         if (n.amount <= 0) {
-          // chopped down -> stump, regrows after a while (never permanently gone)
+          // chopped down -> stump, regrows after a while (never permanently gone).
+          // Manual order complete: haul home what is carried, then idle.
           n.amount = 0;
           n.depleted = true;
           const [rlo, rhi] = CONFIG.resource?.regrowTime ?? [55, 115];
           n.regrowT = rlo + Math.random() * (rhi - rlo);
           this.syncTree(n);
-          u.harvestTarget = this.nearestResource(u.x, u.z);
+          u.harvestTarget = null; u.harvestManual = false;
+          u.hasOrder = u.carrying > 0; u.returning = u.carrying > 0;
         }
         if (u.carrying >= CARRY) { const hq = this.hqOf(u.owner); if (hq) { const drop = this.hqDropSpot(hq, u); u.returning = true; u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id; u.tx = drop.x; u.tz = drop.z; u.path = null; } }
       }
       return;
     }
-    // return cargo
-    if (u.type === 'worker' && u.carrying > 0 && (u.returning || (!this.resourceReady(u.harvestTarget)))) {
+    // return cargo: explicit delivery runs only (returning flag). Stopped
+    // (holding) workers and re-tasked workers keep their logs until ordered.
+    if (u.type === 'worker' && u.carrying > 0 && !u.holdPosition && u.returning) {
       const hq = this.hqOf(u.owner);
       if (!hq) return;
       if (u.dropFor !== hq.id) {
         const drop = this.hqDropSpot(hq, u);
         u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id; u.path = null;
       }
-      if (Math.hypot(hq.x - u.x, hq.z - u.z) > hq.radius + 0.9) { this.navigate(u, u.dropX, u.dropZ, dt, 0.8, 3.0); return; }
+      // The staged drop sits just outside the HQ footprint, past the old
+      // center-distance deposit ring — so hand over on drop arrival too.
+      const atDrop = u.dropX !== undefined && Math.hypot(u.dropX - u.x, u.dropZ - u.z) <= 0.85;
+      if (Math.hypot(hq.x - u.x, hq.z - u.z) > hq.radius + 0.9 && !atDrop) { this.navigate(u, u.dropX, u.dropZ, dt, 0.8, 3.0); return; }
       u.path = null;
       this.players[u.owner].logs += u.carrying;
       u.carrying = 0; u.returning = false;
-      // resume harvest — continuous collecting, never idle when trees remain
-      u.harvestTarget = this.nearestResource(u.x, u.z);
+      // delivery complete: stand idle, never auto-seek the next tree
+      u.harvestTarget = null; u.harvestManual = false; u.hasOrder = false;
+      u.dropX = null; u.dropZ = null; u.dropFor = null;
       u.idleT = 0;
       return;
     }
@@ -2313,6 +2286,8 @@ export class Game {
 
     // idle: soldiers guard (unless holding), workers auto-harvest.
     // Scans are staggered per-unit so 400+ units don't all query each frame.
+    // idle: soldiers guard (unless holding), workers stand idle.
+    // Workers only harvest on an explicit order — no auto-seeking trees.
     if (u.type !== 'worker' && !u.hasOrder && !u.target && !u.holdPosition) {
       if ((u.nextScan ?? 0) <= this.time) {
         u.nextScan = this.time + 0.5 + Math.random() * 0.5;
@@ -2322,13 +2297,7 @@ export class Game {
     }
     if (u.type === 'worker' && !u.hasOrder && !u.target) {
       u.idleT = (u.idleT || 0) + dt;
-      if (u.idleT > 0.6 && u.carrying < (CONFIG.resource?.carryMax ?? 10)) {
-        if (!this.resourceReady(u.harvestTarget)) {
-          u.harvestTarget = this.nearestResource(u.x, u.z);
-        }
-        if (this.resourceReady(u.harvestTarget)) return; // updateUnit top will drive harvesting next frame
-      }
-      if (!u.hasOrder) return;
+      return;
     }
 
     // MOVE order

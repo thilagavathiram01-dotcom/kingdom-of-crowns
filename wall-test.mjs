@@ -18,6 +18,7 @@ function fakeGame() {
   g.units = [];
   g.buildings = [];
   g.selected = [];
+  g.particles = [];
   g.obstacles = [];
   g.resources = [];
   g.terrain = null;
@@ -106,67 +107,26 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   ok('the wall line itself is blocked', g.pointBlocked(-4.7, 0, 0.75));
 }
 
-// ---------- 6. starter keeps ----------
+// ---------- 6. no automatic walls ----------
 {
   const g = fakeGame();
-  g.players.k1 = { id: 'k1', idx: 1, logs: 1000, color: 0xef4444, alive: true };
-  const half = CONFIG.walls.keepHalf;
-  const n = g.buildStarterKeep('k1', 0, 0);
-  const walls = g.buildings.filter(b => b.owner === 'k1' && b.type === 'wall');
-  ok('starter keep raises wall segments', n >= 10 && n === walls.length, `n=${n}`);
-  ok('starter keep is paid for', g.players.k1.logs === 1000 - n * CONFIG.wallCost);
-  const s2 = g.spawnBuilding('hq', 'k1', 0, 0);
-  ok('HQ sits inside the keep', walls.every(w => Math.hypot(w.x, w.z) > s2.radius));
-  // gate: one side must have a hole, and no wall may cross the HQ's spawn area
-  const sides = [[0, -half], [1, half], [2, half], [3, -half]];
-  let openSide = 0;
-  for (let s = 0; s < 4; s++) {
-    const has = walls.some(w => (s === 0 || s === 2 ? Math.abs(w.z) > half - 0.6 : Math.abs(w.x) > half - 0.6)
-      && (s === 0 || s === 2 ? Math.sign(w.z) === -Math.sign(sides[s][1]) : Math.sign(w.x) === -Math.sign(sides[s][1])));
-    if (has) openSide++;
-  }
-  ok('three sides are walled, one side carries the gate', openSide >= 3, `sides=${openSide}`);
-  // tiling: no gap wider than 0.6m along a walled side
-  const north = walls.filter(w => Math.abs(w.z + half) < 0.2).sort((a, b) => a.x - b.x);
-  let worst = 0;
-  for (let i = 1; i < north.length; i++) {
-    const gap = (north[i].x - north[i].hw) - (north[i - 1].x + north[i - 1].hw);
-    worst = Math.max(worst, -gap, gap);
-  }
-  ok('wall runs tile edge-to-edge', worst < 0.6, `worst=${worst.toFixed(2)}`);
-  // corners: the two abutting sides must meet, not leave a diagonal hole.
-  // metric: closest approach of one side's wall ENDS to the other side's box
-  let cgap = 1e9, cat = '';
-  for (const b of walls) for (const c of walls) {
-    if (b === c || Math.abs(b.rot - c.rot) < 0.01) continue;      // collinear tiling needs no gap
-    if (Math.hypot(b.x - c.x, b.z - c.z) > 6) continue;
-    let d = 1e9;
-    for (const a of [-1, 1]) for (const t of [-1, 1]) {          // all four box corners
-      const ex = b.x + Math.cos(b.rot) * b.hw * a - Math.sin(b.rot) * b.hd * t;
-      const ez = b.z + Math.sin(b.rot) * b.hw * a + Math.cos(b.rot) * b.hd * t;
-      d = Math.min(d, g.footprintDist(c, ex, ez));
-    }
-    if (d < cgap) { cgap = d; cat = `(${b.x.toFixed(1)},${b.z.toFixed(1)})/(${c.x.toFixed(1)},${c.z.toFixed(1)})`; }
-  }
-  ok('keep corners are closed', cgap < 0.25, `min gap=${cgap.toFixed(3)} at ${cat}`);
-  // ring: only the gate arc may let a march out of the keep
-  let open = 0;
-  for (let i = 0; i < 80; i++) {
-    const a = (i / 80) * Math.PI * 2;
-    let blocked = false;
-    for (let r = half - 3; r <= half + 3 && !blocked; r += 0.25) {
-      const px = Math.cos(a) * r, pz = Math.sin(a) * r;
-      for (const w of walls) if (g.footprintDist(w, px, pz) < 0.05) { blocked = true; break; }
-    }
-    if (!blocked) open++;
-  }
-  ok('the gate is the only way out', open > 0 && open <= 14, `open arcs=${open}/80`);
-  const side0 = walls.filter(w => Math.abs(w.z + half) < 0.2);
-  const side1 = walls.filter(w => Math.abs(w.x - half) < 0.2);
-  ok('side walls are rotated to their run', side0.every(w => w.rot === 0) && side1.every(w => Math.abs(w.rot - Math.PI / 2) < 1e-6));
+  ok('starter keeps are removed', typeof g.buildStarterKeep !== 'function');
+  g.players.k2 = { id: 'k2', idx: 2, logs: 5000, color: 0x22c55e, alive: true };
+  const brain = new KingdomBrain(g, 'k2');
+  brain.planFort({ x: 0, z: 0 });
+  ok('the AI plans no wall slots', brain.walls.length === 0);
+  ok('missing walls never gate the AI', brain.fortProgress() === 1);
+  ok('the fort frame still stages the army', (() => {
+    const s = brain.homeStage();
+    return Number.isFinite(s.x) && Number.isFinite(s.z);
+  })());
+  ok('hand-placed walls still work', (() => {
+    const w = g.spawnBuilding('wall', 'k2', 60, 60, 0, 4.6);
+    return w && w.type === 'wall' && g.buildingBlocks(w, 60, 60, 0.4);
+  })());
 }
 
-// ---------- 7. AI forts plan long, rotated, tiling walls ----------
+// ---------- 7. AI fort frame stages in the open (no wall slots) ----------
 {
   const g = fakeGame();
   g.players.k2 = { id: 'k2', idx: 2, logs: 5000, color: 0x22c55e, alive: true };
@@ -174,33 +134,18 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   g.kingdomSpawns.push({ x: 200, z: 0 });
   const brain = new KingdomBrain(g, 'k2');
   brain.planFort({ x: 0, z: 0 });
-  const ws = brain.walls;
-  ok('fort plans fewer, longer pieces', ws.length > 8 && ws.length < 40, `walls=${ws.length}`);
-  // one piece may stretch to 1.5x the tiling step before it splits into two
-ok('every fort piece has a slot length',
-  ws.every(w => w.len > 0.8 && w.len <= CONFIG.ai.wallStep * 1.5 + 0.01),
-  `min=${Math.min(...ws.map(w => w.len)).toFixed(2)} max=${Math.max(...ws.map(w => w.len)).toFixed(2)} step=${CONFIG.ai.wallStep}`);
-  const built = brain.buildNextWalls(40, 0);
-  ok('fort walls actually get built', built === ws.length, `built=${built}`);
-  const made = g.buildings.filter(b => b.owner === 'k2' && b.type === 'wall');
-  ok('built fort walls keep their orientation', made.every(b => b.rot === 0 || Math.abs(b.rot - Math.PI / 2) < 1e-6));
-  ok('fort walls are charged at 5 wood', g.players.k2.logs === 5000 - ws.length * CONFIG.wallCost);
-  // spacing along every side must equal the piece length, except at the gates
-  let tilingBad = 0, gates = 0, dbg = '';
-  for (const sgn of [-1, 1]) {
-    const side = made.filter(b => b.rot === 0 && Math.sign(b.z) === sgn).sort((a, b) => a.x - b.x);
-    for (let i = 1; i < side.length; i++) {
-      const spacing = side[i].x - side[i - 1].x;
-      if (Math.abs(spacing - side[i].size) < 0.05) continue;
-      const clear = spacing - side[i - 1].hw - side[i].hw;
-      if (clear >= CONFIG.ai.gateWidth - 0.1) { gates++; continue; }
-      dbg += ` sp=${spacing.toFixed(2)} len=${side[i].size.toFixed(2)} clear=${clear.toFixed(2)};`;
-      tilingBad++;
-    }
-  }
-  ok('fort runs tile exactly (gates excepted)', tilingBad === 0, `bad=${tilingBad}${dbg}`);
-  ok('fort gates are wide enough to walk through', gates === brain.fort.gates.length, `gates=${gates}`);
-  ok('fort towers stay clear of wall ends', brain.towers.every(t => !made.some(b => Math.hypot(t.x - b.x, t.z - b.z) < 0.1)));
+  ok('no fort wall slots are planned', brain.walls.length === 0);
+  ok('towers are still planned as defense', brain.towers.length > 0, `towers=${brain.towers.length}`);
+  ok('the muster point is on open ground', (() => {
+    const s = brain.homeStage();
+    return g.isSpotFree(s.x, s.z, 0.85);
+  })());
+  ok('barracks rally normalizes to the muster point', (() => {
+    const b = g.spawnBuilding('barracks', 'k2', 0, 0);
+    const s = brain.homeStage();
+    g.setBuildingRally(b, s.x, s.z, true);
+    return g.isSpotFree(b.rallyX, b.rallyZ, 1.0);
+  })());
 }
 
 
@@ -373,35 +318,50 @@ ok('every fort piece has a slot length',
 }
 
 
-// ---------- 13. AI rebuilds walls a siege broke ----------
+// ---------- 13. workers harvest on orders, idle otherwise, hand over at HQ ----------
 {
   const g = fakeGame();
-  g.players.k2 = { id: 'k2', idx: 2, logs: 4000, color: 0xef4444, alive: true };
-  const brain = new KingdomBrain(g, 'k2');
-  brain.planFort({ x: 0, z: 0 });
-  const first = brain.buildNextWalls(60, 0);
-  ok('the fort goes up in one pass', first === brain.walls.length, `built=${first}/${brain.walls.length}`);
-  const logsAfter = g.players.k2.logs;
-  // a siege chews through three segments
-  const victims = g.buildings.filter(b => b.type === 'wall').slice(0, 3);
-  for (const v of victims) v.dead = true;
-  g.colliderVersion++;
-  // the breach is walkable BEFORE the AI patches it
-  ok('a destroyed segment leaves a hole in the ring',
-    victims.some(v => g.wallSpotFree(v.x, v.z, v.rot, v.size)),
-    `free=${victims.map(v => g.wallSpotFree(v.x, v.z, v.rot, v.size)).join(',')}`);
-  const rebuilt = brain.buildNextWalls(60, 0);
-  ok('broken segments are rebuilt', rebuilt === victims.length, `rebuilt=${rebuilt}/${victims.length}`);
-  ok('rebuilding charges the treasury again', g.players.k2.logs === logsAfter - rebuilt * CONFIG.wallCost,
-    `logs=${g.players.k2.logs}`);
-  ok('rebuilt walls sit back on their slots',
-    victims.every(v => {
-      const slot = brain.walls.find(w => w.b && Math.hypot(w.b.x - v.x, w.b.z - v.z) < 0.01);
-      return !!slot;
-    }));
+  g.time = 0;
+  g.spawnPing = () => {}; // no requestAnimationFrame headless
+  const hq = g.spawnBuilding('hq', 'k0', 0, 0);
+  // idle workers never auto-seek trees
+  const idler = g.spawnUnit('worker', 'k0', 30, 30);
+  g.updateUnit(idler, 0.5);
+  ok('idle workers stay idle', !idler.harvestTarget && !idler.hasOrder && !idler.returning);
+  // an explicit harvest order flags manual work; stop pauses it
+  const tree = { id: 9001, kind: 'resource', rtype: 'tree', x: 40, z: 30, amount: 200, max: 200, radius: 1.4, dead: false, depleted: false, regrowT: 0, spot: null };
+  g.resources.push(tree);
+  g.orderHarvest([idler], tree);
+  ok('harvest orders flag manual work', idler.harvestManual === true && idler.harvestTarget === tree);
+  g.selected = [idler];
+  g.stopSelected();
+  ok('stop clears the harvest order', !idler.harvestTarget && idler.harvestManual === false && idler.holdPosition === true);
+  // full manual cycle: chop a small tree, haul home, hand over at the drop point
+  const small = { id: 9002, kind: 'resource', rtype: 'tree', x: 12, z: 0, amount: 5, max: 60, radius: 1.4, dead: false, depleted: false, regrowT: 0, spot: null };
+  g.resources.push(small);
+  const w = g.spawnUnit('worker', 'k0', 12, 0);
+  g.orderHarvest([w], small);
+  const logsBeforeChop = g.players.k0.logs;
+  for (let i = 0; i < 8; i++) g.updateUnit(w, 0.5); // chop through harvestTime
+  ok('chopping kills the tree', small.depleted === true);
+  // the load is either still on its way home or already delivered headless-fast
+  ok('a finished tree sends the load home',
+    (w.returning === true && !w.harvestTarget) || (w.carrying === 0 && g.players.k0.logs === logsBeforeChop + 5),
+    `returning=${w.returning} carry=${w.carrying}`);
+  // force the handover moment: loaded worker far from HQ gets a drop point
+  w.carrying = 5; w.returning = true; w.dropFor = null; w.harvestTarget = null; w.hasOrder = false;
+  g.updateUnit(w, 0.1);
+  ok('a loaded worker gets an HQ drop point', w.dropFor === hq.id && w.dropX !== undefined);
+  w.x = w.dropX; w.z = w.dropZ; // walk the rest of the way off-screen
+  const before = g.players.k0.logs;
+  g.updateUnit(w, 0.1);
+  ok('cargo hands over on drop arrival', w.carrying === 0 && g.players.k0.logs === before + 5,
+    `carry=${w.carrying} logs=${g.players.k0.logs}`);
+  ok('delivery ends the job: worker idles', !w.hasOrder && !w.harvestTarget && !w.returning && w.harvestManual === false);
+  void hq;
 }
 
-// ---------- 14. cost of the fat new world ----------
+// ---------- 14. cost of a wall-heavy world (hand-placed walls only) ----------
 {
   const g = fakeGame();
   for (let i = 0; i < CONFIG.kingdoms; i++) {
@@ -409,8 +369,12 @@ ok('every fort piece has a slot length',
     g.players[k] = { id: k, idx: i, logs: 4000, color: 0x22c55e, alive: true };
     const s = { x: -200 + (i % 6) * 76, z: -200 + Math.floor(i / 6) * 76 };
     g.spawnBuilding('hq', k, s.x, s.z);
-    g.spawnBuilding('barracks', k, s.x + 6, s.z + 1);
-    g.buildStarterKeep(k, s.x, s.z);
+    g.spawnBuilding('barracks', k, s.x + 10, s.z + 1);
+    // players walling their own chokes: 14 segments around each base
+    for (let j = 0; j < 14; j++) {
+      const a = (j / 14) * Math.PI * 2;
+      g.spawnBuilding('wall', k, s.x + Math.cos(a) * 14, s.z + Math.sin(a) * 14, j % 2 ? 0 : Math.PI / 2, 4.6);
+    }
   }
   const walls = g.buildings.filter(b => b.type === 'wall');
   ok('a full world really has hundreds of walls', walls.length >= 400, `walls=${walls.length}`);

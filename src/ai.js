@@ -148,46 +148,17 @@ export class KingdomBrain {
       gates.push({ side: s2, off: rand(-4, 4) });
     }
 
-    const half = (s) => (s === 0 || s === 2) ? hx : hz;
     const pt = (s, t) => s === 0 ? { x: cx + t, z: cz - hz } : s === 1 ? { x: cx + hx, z: cz + t }
       : s === 2 ? { x: cx + t, z: cz + hz } : { x: cx - hx, z: cz + t };
-    const perim = 4 * hx + 4 * hz;
-    // clockwise perimeter coordinate from the NW corner
-    const pc = (s, t) => s === 0 ? t + hx : s === 1 ? 2 * hx + (t + hz)
-      : s === 2 ? 2 * hx + 2 * hz + (hx - t) : 4 * hx + 2 * hz + (hz - t);
 
     const g1 = pt(gates[0].side, gates[0].off);
-    const pcStart = pc(gates[0].side, gates[0].off);
 
-    // ---- walls: continuous runs between corner towers, open at the gates ----
-    // Each piece takes the exact slot length so runs tile edge-to-edge, and
-    // the long axis follows the side (rot 0 along X, 90deg along Z).
-    const clear = TOWER_CLEAR();
+    // ---- walls: disabled. Kingdoms no longer raise automatic fort walls:
+    // armies and workers were getting trapped behind their own palisades and
+    // could not find the gates. Only hand-placed player walls exist now.
+    // The fort frame (gates, staging point) is kept for mustering, and
+    // towers are still built as gate/area defense.
     const walls = [];
-    for (let s = 0; s < 4; s++) {
-      const h = half(s);
-      const lo0 = -h + clear, hi0 = h - clear;
-      const rot = (s === 0 || s === 2) ? 0 : Math.PI / 2;
-      const gate = gates.find(q => q.side === s);
-      const runs = gate
-        ? [[lo0, gate.off - gw / 2], [gate.off + gw / 2, hi0]]
-        : [[lo0, hi0]];
-      for (const [lo, hi] of runs) {
-        if (hi < lo) continue;
-        const L = hi - lo;
-        // pieces sit at run CENTRES and stretch to the slot, so a run covers
-        // [lo, hi] exactly: gates stay gw wide and towers stay clear
-        const segs = L < A.wallStep * 0.5 ? 1 : Math.max(1, Math.round(L / A.wallStep));
-        const slot = L / segs;
-        for (let i = 0; i < segs; i++) {
-          const t = lo + slot * (i + 0.5), p = pt(s, t);
-          walls.push({ x: p.x, z: p.z, rot, len: slot, pc: pc(s, t), b: null, retryAt: 0 });
-        }
-      }
-    }
-    // build in walking order starting at the main gate: the keep grows as one stretch
-    for (const w of walls) w.order = (w.pc - pcStart + perim) % perim;
-    walls.sort((a, b) => a.order - b.order);
 
     // ---- towers: gate flanks first (kill zone), then corners facing the foe ----
     const towers = [];
@@ -231,7 +202,8 @@ export class KingdomBrain {
   }
 
   fortProgress() {
-    if (!this.walls.length) return 0;
+    // automatic walls are disabled, so there is nothing to wait for
+    if (!this.walls.length) return 1;
     let n = 0;
     for (const w of this.walls) if (w.b && !w.b.dead) n++;
     return n / this.walls.length;
@@ -290,22 +262,6 @@ export class KingdomBrain {
       if (d < bd) { bd = d; best = e; }
     });
     return best;
-  }
-
-  buildNextWalls(n, reserve) {
-    const g = this.game, id = this.owner, P = g.players[id], now = g.time;
-    let built = 0;
-    for (const w of this.walls) {
-      if (built >= n) break;
-      if (P.logs - CONFIG.wallCost < reserve) break;
-      if (w.b && !w.b.dead) continue;
-      w.b = null;                       // destroyed in a siege → rebuild it
-      if (w.retryAt > now) continue;
-      if (!g.wallSpotFree(w.x, w.z, w.rot, w.len)) { w.retryAt = now + 10 + Math.random() * 10; continue; }
-      const b = g.placeWallRaw(id, w.x, w.z, w.rot, w.len);
-      if (b) { w.b = b; built++; } else w.retryAt = now + 15;
-    }
-    return built;
   }
 
   buildNextTower() {
@@ -437,7 +393,6 @@ export class KingdomBrain {
 
     if (!threat) {
       if (this.wave) this.status = `${this.wave.kind === 'revenge' ? 'Revenge on' : 'Invading'} ${g.players[this.wave.foe]?.name || ''}`;
-      else if (this.fortProgress() < 0.95) this.status = `Building fort ${Math.round(this.fortProgress() * 100)}%`;
       else if (S.army.length >= 4) this.status = `Mustering (${S.army.length})…`;
       else this.status = 'Growing…';
     }
@@ -496,15 +451,8 @@ export class KingdomBrain {
           cost: CONFIG.turretCost, go: () => { const ok = this.buildNextTower(); if (ok) S.turrets.push({}); return ok; } });
       }
 
-      // walls: one continuous keep, built stretch by stretch
-      if (t > 90 && S.workers.length >= 5 && S.rax.length >= 1) {
-        const prog = this.fortProgress();
-        if (prog < 1) {
-          const reserve = (S.army.length + armyQ < wantNow) ? 100 : 0;
-          opts.push({ k: 'wall', u: P.fortLove * 0.5 * (1 - prog) + 0.15 + (recentHit ? 0.3 : 0), cost: CONFIG.wallCost + reserve,
-            go: () => this.buildNextWalls(6, reserve) > 0 });
-        }
-      }
+      // (automatic walls removed: the AI musters in the open and never
+      // traps its own army behind a palisade)
 
       if (!opts.length) break;
       for (const o of opts) o.u *= 0.85 + Math.random() * 0.3;
@@ -636,8 +584,11 @@ export class KingdomBrain {
   }
 
   orderTo(u, x, z, attackMove) {
+    const g = this.game;
+    const st = CONFIG.units[u.type] || { radius: 0.75 };
+    const spot = g.findFreeSpot(x + (Math.random() - 0.5) * 10, z + (Math.random() - 0.5) * 10, st.radius + 0.25, u);
     u.target = null; u.objective = null; u.harvestTarget = null; u.fireAnchor = null;
-    u.tx = x + (Math.random() - 0.5) * 10; u.tz = z + (Math.random() - 0.5) * 10;
+    u.tx = spot.x; u.tz = spot.z;
     u.hasOrder = true; u.attackMove = attackMove; u.holdPosition = false;
     u.path = null; u.repathT = 0; u.retreating = false;
   }
