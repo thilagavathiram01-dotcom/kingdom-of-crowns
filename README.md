@@ -31,7 +31,17 @@ npm run dev
 - `src/terrain.js` — seeded heightfield: mountains, river + bridges, forests, biomes
 - `src/game.js` — scene, multi-kingdom spawns, units, buildings, combat, economy,
   spatial-hash queries, A* on a 4m grid, input, fog of war, camera
-- `src/ai.js` — `KingdomBrain` per AI (econ/defense/fortify/random rivals) +
-  staggered `AIManager` (3 brains think per frame)
+- `src/ai.js` — one fully independent `KingdomBrain` per AI + staggered `AIManager`
+  (3 brains think per frame). Each brain rolls its own personality and:
+  - spends on every building type by utility (workers, barracks for supply/production,
+    turrets, walls, army) instead of attack-only logic
+  - plans a real fort: rectangular keep, corner towers, gate towers, continuous walls built
+    in walking order, open gates for its own traffic, destroyed walls rebuilt
+  - places barracks by its own style (hub / ring / frontier / rear)
+  - keeps private grudges: whoever damages it gets a revenge wave on a RANDOM enemy base
+  - judges rivals itself (private misjudgement bias) and launches invasions on kingdoms it
+    thinks are weak; waves muster, stage outside the enemy fort, assault in priority order
+    (fighters > turrets > objective) and retreat when losing
+  - nothing is shared between brains; a brain only hears about damage dealt to itself
 - `src/ui.js` — HUD, rank/alive counter, build menu, terrain minimap, messages
 - `src/main.js` — boot + loop

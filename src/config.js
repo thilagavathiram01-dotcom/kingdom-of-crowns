@@ -2,7 +2,8 @@ export const CONFIG = {
   mapSize: 440,               // vast continent: 30 kingdoms rise far apart
   kingdoms: 30,               // 1 human + 29 AI
   spawnSlots: 100,            // dense candidate grid, calmest 30 spread out
-  startCrystals: 300,
+  startLogs: 300,             // opening timber stockpile (logs from trees)
+  startCrystals: 300,         // deprecated alias (use startLogs)
   workerCost: 50,
   soldierCost: 100,
   tankCost: 175,
@@ -36,18 +37,17 @@ export const CONFIG = {
 
   ai: {
     tick: 0.7,
-    defendRadius: 24,
-    // ---- slow-pace war tuning (seconds): long peace, rare raids, late wars ----
-    peaceTime: 300,          // no AI-vs-AI attacks before this (rise in peace)
-    harassEvery: [150, 260], // random raid cooldown range per brain
-    rivalReroll: [90, 180],  // how often a kingdom picks a new enemy
-    impatienceMax: 2400,     // full impatience after ~40 min
-    thinkEvery: [2.2, 3.6],  // staggered brain ticks (perf + slow feel)
-    maxWorkers: [5, 7],
-    maxArmy: [8, 12],
-    maxBarracks: 3,
-    maxTurrets: 2,
-    maxWalls: 8,
+    defendRadius: 42,
+    thinkEvery: [2.2, 3.6],     // staggered brain ticks (perf + each kingdom thinks alone)
+    // every kingdom rolls its OWN values inside these ranges (personality)
+    maxWorkers: [8, 11],
+    maxArmy: [14, 26],
+    maxBarracks: [3, 5],
+    fortHalf: [15, 19],         // fort half-extent in metres (square/rectangle keep)
+    gateWidth: 10,              // gap between wall ends: 4m path grid needs >= 8
+    wallStep: 1.88,             // wall pieces tile edge-to-edge (collider radius 0.935)
+    readyAt: [420, 780],        // earliest time a kingdom may start its own wars
+    peaceMin: 240,              // nobody launches a campaign before this
   },
 
   terrain: {
@@ -57,6 +57,16 @@ export const CONFIG = {
     bridges: [-150, -55, 45, 140], // 4 crossings spread along the river
     bridgeHalf: 4.5,
     treeColliders: 240,
+  },
+
+  resource: {
+    treeAmount: [260, 460],   // logs per harvestable tree
+    regrowTime: [55, 115],    // seconds a chopped tree needs to grow back
+    carryMax: 10,             // logs a worker hauls per trip
+    maxNodes: 260,            // cap on harvestable trees (perf + endless supply)
+    grovesPerBase: 2,         // tree clusters planted near each HQ
+    treesPerGrove: 4,
+    wildGroves: 22,           // contested forest claims out in the wilds
   },
 };
 
@@ -72,7 +82,8 @@ const PALETTE = [
 export const COLORS = {
   player: PALETTE[0],
   enemy: 0xef4444,
-  crystal: 0x22d3ee,
+  log: 0x4ade80,              // harvestable trees on minimap / pings
+  crystal: 0x4ade80,          // deprecated alias (was crystal cyan)
   select: 0x4ade80,
 };
 

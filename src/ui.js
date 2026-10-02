@@ -2,7 +2,7 @@ import { CONFIG } from './config.js';
 import { icon } from './icons.js';
 
 const UNIT_META = {
-  worker: { name: 'Worker', icon: 'worker', cost: () => CONFIG.workerCost, desc: 'Harvests crystals' },
+  worker: { name: 'Worker', icon: 'worker', cost: () => CONFIG.workerCost, desc: 'Chops trees for logs' },
   soldier: { name: 'Soldier', icon: 'soldier', cost: () => CONFIG.soldierCost, desc: 'Core fighter' },
   tank: { name: 'Tank', icon: 'tank', cost: () => CONFIG.tankCost, desc: 'Heavy armor' },
   scout: { name: 'Scout', icon: 'scout', cost: () => CONFIG.scoutCost, desc: 'Fast, huge sight' },
@@ -161,7 +161,7 @@ export class HUD {
         : 'Placing Barracks — tap green ground')
       : m === 'move' ? 'MOVE — tap anywhere'
       : m === 'attack' ? 'ATTACK — tap a visible enemy'
-      : 'HARVEST — tap a crystal';
+      : 'HARVEST — tap a tree';
   }
 
   message(t, kind = '') {
@@ -183,7 +183,7 @@ export class HUD {
     const g = this.game;
     const p = g.players[g.humanId];
     const used = g.units.filter(u => u.owner === g.humanId && !u.dead).length;
-    const cry = Math.floor(p.crystals);
+    const cry = Math.floor(p.logs);
     if (this.elCrystal.textContent !== String(cry)) {
       this.elCrystal.textContent = cry;
       if (this.lastCrystal !== null && cry !== this.lastCrystal) {
@@ -229,7 +229,7 @@ export class HUD {
   onSelect(sel) {
     if (this.elSelCount) this.elSelCount.textContent = sel.length ? `(${sel.length})` : '';
     if (!sel.length) {
-      this.elSel.innerHTML = `<div class="hint">Tap ground to <b>move</b> • tap enemy to <b>attack</b> • tap crystal for <b>harvest</b> • drag to pan • pinch to zoom • dominate all <b>29 rival kingdoms</b></div>`;
+      this.elSel.innerHTML = `<div class="hint">Tap ground to <b>move</b> • tap enemy to <b>attack</b> • tap tree for <b>harvest</b> • drag to pan • pinch to zoom • dominate all <b>29 rival kingdoms</b></div>`;
     } else {
       let html = '<div id="sel-cards">';
       for (const s of sel.slice(0, 24)) {
@@ -238,7 +238,7 @@ export class HUD {
         const col = '#' + (this.game.teamColor(s.owner) ?? 0x888888).toString(16).padStart(6, '0');
         const owner = this.game.players[s.owner]?.name || s.owner;
         const low = pct < 35 ? ' low' : '';
-        html += `<div class="unit-card" data-id="${s.id}" style="border-color:${col}"><div class="row1">${icon(iname)}<span class="nm">${s.type}</span><span class="hp">${Math.ceil(s.hp)}</span></div><div class="hpbar${low}"><div style="width:${pct}%"></div></div>${s.carrying ? `<div class="cargo">💎 ${s.carrying}</div>` : ''}${s.queue?.length ? `<div class="q">+${s.queue.length} (${Math.ceil(s.queue[0].t)}s)</div>` : ''}<div class="own">${owner}</div></div>`;
+        html += `<div class="unit-card" data-id="${s.id}" style="border-color:${col}"><div class="row1">${icon(iname)}<span class="nm">${s.type}</span><span class="hp">${Math.ceil(s.hp)}</span></div><div class="hpbar${low}"><div style="width:${pct}%"></div></div>${s.carrying ? `<div class="cargo">🪵 ${s.carrying}</div>` : ''}${s.queue?.length ? `<div class="q">+${s.queue.length} (${Math.ceil(s.queue[0].t)}s)</div>` : ''}<div class="own">${owner}</div></div>`;
       }
       html += '</div>';
       if (sel.length > 24) html += `<div class="hint">+${sel.length - 24} more</div>`;
@@ -264,8 +264,8 @@ export class HUD {
     const g = this.game;
     const b = document.createElement('button');
     b.className = 'build-btn icon-btn';
-    b.innerHTML = `${icon(meta.icon)}<span class="t"><span class="n">${meta.name}</span><span class="d">${meta.desc} • ${cost} 💎</span></span>`;
-    b.disabled = g.players[g.humanId].crystals < cost;
+    b.innerHTML = `${icon(meta.icon)}<span class="t"><span class="n">${meta.name}</span><span class="d">${meta.desc} • ${cost} 🪵</span></span>`;
+    b.disabled = g.players[g.humanId].logs < cost;
     b.onclick = (e) => { e.stopPropagation(); g.trainUnit(building, type); buzz(12); this.onSelect(g.selected); };
     b.onmousedown = (e) => e.stopPropagation();
     b.onmouseup = (e) => e.stopPropagation();
@@ -287,7 +287,7 @@ export class HUD {
     const g = this.game;
     const sel = g.selected;
     if (!this.elBuild) return;
-    const sig = sel.map(s => s.id).join(',') + '|' + Math.floor(g.players[g.humanId].crystals) + '|' + (g.pendingOrder || '');
+    const sig = sel.map(s => s.id).join(',') + '|' + Math.floor(g.players[g.humanId].logs) + '|' + (g.pendingOrder || '');
     if (sig === this._buildSig) return;
     this._buildSig = sig;
     this.elBuild.innerHTML = '';
@@ -298,18 +298,18 @@ export class HUD {
     if (single && single.kind === 'building' && single.owner === g.humanId && !single.dead) {
       if (single.type === 'hq') {
         ap(this.trainBtn(single, 'worker'));
-        ap(this.actBtn('barracks', 'Barracks', `${CONFIG.barracksCost} 💎 • +supply, unlocks army`, () => g.startPlacement('barracks'), p.crystals < CONFIG.barracksCost));
-        ap(this.actBtn('turret', 'Turret', `${CONFIG.turretCost} 💎 • auto-defense`, () => g.startPlacement('turret'), p.crystals < CONFIG.turretCost));
-        ap(this.actBtn('wall', 'Wall', `${CONFIG.wallCost} 💎 • chain-place blocker`, () => g.startPlacement('wall'), p.crystals < CONFIG.wallCost));
+        ap(this.actBtn('barracks', 'Barracks', `${CONFIG.barracksCost} 🪵 • +supply, unlocks army`, () => g.startPlacement('barracks'), p.logs < CONFIG.barracksCost));
+        ap(this.actBtn('turret', 'Turret', `${CONFIG.turretCost} 🪵 • auto-defense`, () => g.startPlacement('turret'), p.logs < CONFIG.turretCost));
+        ap(this.actBtn('wall', 'Wall', `${CONFIG.wallCost} 🪵 • chain-place blocker`, () => g.startPlacement('wall'), p.logs < CONFIG.wallCost));
       } else if (single.type === 'barracks') {
         for (const t of ['soldier', 'scout', 'tank', 'artillery']) ap(this.trainBtn(single, t));
-        ap(this.actBtn('wall', 'Wall', `${CONFIG.wallCost} 💎 • wall off chokes`, () => g.startPlacement('wall'), p.crystals < CONFIG.wallCost));
+        ap(this.actBtn('wall', 'Wall', `${CONFIG.wallCost} 🪵 • wall off chokes`, () => g.startPlacement('wall'), p.logs < CONFIG.wallCost));
       } else if (single.type === 'wall') {
         const hint = document.createElement('div');
         hint.className = 'side-hint';
         hint.textContent = 'Wall: cheap, blocks paths. Enemies must chew through. Chain-place more from HQ.';
         this.elBuild.appendChild(hint);
-        ap(this.actBtn('wall', 'More Wall', `${CONFIG.wallCost} 💎 • keep chaining`, () => g.startPlacement('wall'), p.crystals < CONFIG.wallCost));
+        ap(this.actBtn('wall', 'More Wall', `${CONFIG.wallCost} 🪵 • keep chaining`, () => g.startPlacement('wall'), p.logs < CONFIG.wallCost));
       } else if (single.type === 'turret') {
         const hint = document.createElement('div');
         hint.className = 'side-hint';
@@ -321,9 +321,9 @@ export class HUD {
     const workers = sel.filter(s => s.kind === 'unit' && s.type === 'worker' && s.owner === g.humanId);
     const army = sel.filter(s => s.kind === 'unit' && s.type !== 'worker' && s.owner === g.humanId);
     if (workers.length) {
-      ap(this.actBtn('harvest', 'Harvest', `${workers.length} worker(s) → nearest crystal`, () => {
+      ap(this.actBtn('harvest', 'Harvest', `${workers.length} worker(s) → nearest tree`, () => {
         const n = g.nearestResource(workers[0].x, workers[0].z);
-        if (n) g.orderHarvest(workers, n); else g.hookMsg('No crystals left on the map');
+        if (n) g.orderHarvest(workers, n); else g.hookMsg('No trees left — waiting for regrowth');
       }));
       if (workers.some(w => w.carrying > 0)) {
         ap(this.actBtn('home', 'Return cargo', 'drop off at HQ', () => {
@@ -342,8 +342,8 @@ export class HUD {
       if (hq) ap(this.trainBtn(hq, 'worker'));
       const rax = g.buildings.find(b => b.owner === g.humanId && b.type === 'barracks' && !b.dead);
       if (rax) ap(this.trainBtn(rax, 'soldier'));
-      if (hq) ap(this.actBtn('barracks', 'Expand', 'place Barracks / Turret / Wall', () => g.startPlacement('barracks'), p.crystals < CONFIG.barracksCost));
-      if (hq && p.crystals >= CONFIG.wallCost) ap(this.actBtn('wall', 'Wall', `${CONFIG.wallCost} 💎 • quick blocker`, () => g.startPlacement('wall')));
+      if (hq) ap(this.actBtn('barracks', 'Expand', 'place Barracks / Turret / Wall', () => g.startPlacement('barracks'), p.logs < CONFIG.barracksCost));
+      if (hq && p.logs >= CONFIG.wallCost) ap(this.actBtn('wall', 'Wall', `${CONFIG.wallCost} 🪵 • quick blocker`, () => g.startPlacement('wall')));
     }
   }
 
@@ -366,8 +366,9 @@ export class HUD {
         c.strokeRect(wx(b.x) - s / 2 - 1, wz(b.z) - s / 2 - 1, s + 2, s + 2);
       }
     }
-    c.fillStyle = '#22d3ee';
+    c.fillStyle = '#4ade80';
     for (const r of g.resources) {
+      if (r.dead || r.depleted) continue;
       if (r.dead || !r.mesh.visible) continue;
       c.fillRect(wx(r.x) - 1, wz(r.z) - 1, 2, 2);
     }

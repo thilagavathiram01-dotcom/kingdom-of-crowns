@@ -47,11 +47,14 @@ export class Game {
     // ---- kingdoms: k0 = human, k1..k29 = AI ----
     this.humanId = 'k0';
     this.players = {};
+    const startLogs = CONFIG.startLogs ?? CONFIG.startCrystals;
     for (let i = 0; i < CONFIG.kingdoms; i++) {
       const id = `k${i}`;
       this.players[id] = {
         id, idx: i, name: kingdomName(i), color: kingdomColor(i),
-        crystals: CONFIG.startCrystals * (i === 0 ? 1 : 0.9 + Math.random() * 0.3),
+        logs: startLogs * (i === 0 ? 1 : 0.9 + Math.random() * 0.3),
+        get crystals() { return this.logs; },
+        set crystals(v) { this.logs = v; },
         alive: true,
       };
     }
@@ -316,21 +319,25 @@ export class Game {
       this.spawnUnit('scout', id, s.x + 5, s.z + 8);
     });
 
-    // crystal fields: 2 per kingdom base + contested mid-map claims
+    // harvestable forests: groves near every base + contested wild claims.
+    // Workers chop LOGS from these trees (no crystals). Chopped trees shrink
+    // to a stump and grow back after a while, so timber never runs out.
+    const RC = CONFIG.resource;
     this.kingdomIds().forEach((id, i) => {
       const s = this.kingdomSpawns[i];
-      for (let k = 0; k < 2; k++) {
-        const cx = s.x + (Math.random() - 0.5) * 20;
-        const cz = s.z + 8 + (Math.random() - 0.5) * 12;
-        for (let j = 0; j < 3; j++) this.spawnResource(cx + (Math.random() - 0.5) * 7, cz + (Math.random() - 0.5) * 7);
+      for (let k = 0; k < (RC.grovesPerBase ?? 2); k++) {
+        const cx = s.x + (Math.random() - 0.5) * 22;
+        const cz = s.z + 10 + (Math.random() - 0.5) * 12;
+        for (let j = 0; j < (RC.treesPerGrove ?? 4); j++) this.spawnResource(cx + (Math.random() - 0.5) * 8, cz + (Math.random() - 0.5) * 8);
       }
     });
-    for (let f = 0; f < 18; f++) {
+    for (let f = 0; f < (RC.wildGroves ?? 22); f++) {
       const cx = (Math.random() - 0.5) * (CONFIG.mapSize - 60);
       const cz = (Math.random() - 0.5) * (CONFIG.mapSize - 60);
       const n = 3 + Math.floor(Math.random() * 3);
-      for (let j = 0; j < n; j++) this.spawnResource(cx + (Math.random() - 0.5) * 9, cz + (Math.random() - 0.5) * 9);
+      for (let j = 0; j < n; j++) this.spawnResource(cx + (Math.random() - 0.5) * 10, cz + (Math.random() - 0.5) * 10);
     }
+    this.forestT = 20;
 
     this.hookMsg(`War of Crowns — ${CONFIG.kingdoms} kingdoms, a ~1 hour saga. Rise in peace, then dominate them all!`);
     this.updateFog();
@@ -392,16 +399,17 @@ export class Game {
     body.castShadow = true;
     g.add(body);
     if (rig) g.add(rig.root);
-    // team underglow disc + worker cargo gem
+    // team underglow disc + worker log bundle (carried timber)
     const glow = new THREE.Mesh(new THREE.CircleGeometry(st.radius + 0.15, 24),
       new THREE.MeshBasicMaterial({ color: this.teamColor(owner), transparent: true, opacity: 0.35 }));
     glow.rotation.x = -Math.PI / 2; glow.position.y = 0.04;
     g.add(glow);
     let gem = null;
     if (type === 'worker') {
-      gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.28, 0),
-        new THREE.MeshStandardMaterial({ color: 0x22d3ee, emissive: 0x22d3ee, emissiveIntensity: 1.2 }));
-      gem.position.y = 1.6; gem.visible = false;
+      gem = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.7, 6),
+        new THREE.MeshStandardMaterial({ color: 0x8b5a2b, emissive: 0x5b3a1e, emissiveIntensity: 0.5, roughness: 0.9 }));
+      gem.rotation.z = Math.PI / 2;
+      gem.position.y = 1.5; gem.visible = false;
       g.add(gem);
     }
     g.position.set(x, this.gy(x, z), z);
@@ -520,40 +528,104 @@ export class Game {
     return b;
   }
 
-  // shared crystal geometry/materials (hundreds of nodes on the continent)
-  crystalAssets() {
-    if (!this._crysGeo) {
-      this._crysGeo = new THREE.OctahedronGeometry(0.9, 0);
-      this._crysMat = new THREE.MeshStandardMaterial({ color: COLORS.crystal, emissive: COLORS.crystal, emissiveIntensity: 0.7, roughness: 0.2 });
-      this._crysBaseGeo = new THREE.CylinderGeometry(0.7, 0.9, 0.4, 7);
-      this._crysBaseMat = new THREE.MeshStandardMaterial({ color: 0x164e63 });
+  // shared tree geometry/materials (hundreds of harvestable trees)
+  treeAssets() {
+    if (!this._treeTrunkGeo) {
+      this._treeTrunkGeo = new THREE.CylinderGeometry(0.32, 0.48, 2.4, 7);
+      this._treeTrunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 1 });
+      this._treePineGeo = new THREE.ConeGeometry(1.8, 3.8, 7);
+      this._treeLeafGeo = new THREE.IcosahedronGeometry(1.7, 0);
+      this._treePineMat = new THREE.MeshStandardMaterial({ color: 0x1f6b3a, roughness: 1 });
+      this._treeLeafMat = new THREE.MeshStandardMaterial({ color: 0x3f9142, roughness: 1 });
+      this._treeStumpGeo = new THREE.CylinderGeometry(0.45, 0.55, 0.7, 7);
+      this._treeStumpMat = new THREE.MeshStandardMaterial({ color: 0x4e3319, roughness: 1 });
     }
     return this;
   }
 
+  // a harvestable tree = trunk + canopy. Chopping shrinks the canopy;
+  // at 0 it becomes a stump and regrows after CONFIG.resource.regrowTime.
   spawnResource(x, z) {
     if (this.terrain && this.terrain.blocked(x, z)) {
-      const f = this.findFreeSpot(x, z, 1.1);
+      const f = this.findFreeSpot(x, z, 1.4);
       x = f.x; z = f.z;
       if (this.terrain.blocked(x, z)) return null;
     }
-    this.crystalAssets();
-    const amt = 400 + Math.random() * 300;
-    const g = new THREE.Group();
-    const m = new THREE.Mesh(this._crysGeo, this._crysMat);
+    this.treeAssets();
+    const [lo, hi] = CONFIG.resource?.treeAmount ?? [260, 460];
+    const amt = lo + Math.random() * (hi - lo);
     const my = this.gy(x, z);
     if (my < CONFIG.terrain.waterLevel + 0.4) return null; // don't spawn in the river
-    m.position.y = 0.9; // no shadow casting: hundreds of nodes stay cheap
-    const base = new THREE.Mesh(this._crysBaseGeo, this._crysBaseMat);
-    base.position.y = 0.2;
-    g.add(m, base);
+    const g = new THREE.Group();
+    const s = 0.85 + Math.random() * 0.5;
+    const trunk = new THREE.Mesh(this._treeTrunkGeo, this._treeTrunkMat);
+    trunk.position.y = 1.2 * s;
+    trunk.scale.setScalar(s);
+    const isPine = Math.random() < 0.65;
+    const top = new THREE.Mesh(isPine ? this._treePineGeo : this._treeLeafGeo, isPine ? this._treePineMat : this._treeLeafMat);
+    top.position.y = (isPine ? 4.0 : 3.6) * s;
+    top.scale.setScalar(s);
+    top.castShadow = true;
+    const stump = new THREE.Mesh(this._treeStumpGeo, this._treeStumpMat);
+    stump.position.y = 0.35;
+    stump.visible = false;
+    g.add(trunk, top, stump);
     g.position.set(x, my, z);
-    g.userData.spin = m;
-    g.userData.baseY = my;
+    g.rotation.y = Math.random() * Math.PI * 2;
     this.scene.add(g);
-    const r = { id: UID++, kind: 'resource', mesh: g, x, z, amount: amt, max: amt, radius: 1.1, dead: false };
+    const r = { id: UID++, kind: 'resource', rtype: 'tree', mesh: g, trunk, top, stump,
+      x, z, amount: amt, max: amt, radius: 1.4, dead: false, depleted: false,
+      regrowT: 0, baseS: s, phase: Math.random() * Math.PI * 2 };
     this.resources.push(r);
     return r;
+  }
+
+  // keep the canopy in sync with remaining logs (continuous visual feedback)
+  syncTree(r) {
+    const frac = Math.max(0, r.amount / r.max);
+    const s = r.baseS * (0.3 + 0.7 * frac);
+    if (r.top) {
+      r.top.visible = frac > 0;
+      r.top.scale.setScalar(Math.max(0.05, s));
+    }
+    if (r.stump) r.stump.visible = frac <= 0;
+    if (r.trunk) r.trunk.visible = frac > 0;
+  }
+
+  resourceReady(r) {
+    return r && !r.dead && !r.depleted && r.amount > 0;
+  }
+
+  regrowTrees(dt) {
+    const [rlo, rhi] = CONFIG.resource?.regrowTime ?? [55, 115];
+    for (const r of this.resources) {
+      if (r.dead || !r.depleted) continue;
+      r.regrowT -= dt;
+      if (r.regrowT <= 0) {
+        r.amount = r.max;
+        r.depleted = false;
+        r.mesh.visible = true;
+        this.syncTree(r);
+        this.burst(r.x, this.gy(r.x, r.z) + 2, r.z, 0x4ade80, 8, 3);
+      }
+    }
+    // endless timber: seed a fresh wild tree now and then (up to cap)
+    this.forestT = (this.forestT ?? 20) - dt;
+    if (this.forestT <= 0) {
+      this.forestT = 25;
+      const active = this.resources.filter(rr => !rr.dead && !rr.depleted).length;
+      const cap = CONFIG.resource?.maxNodes ?? 260;
+      if (active < cap) {
+        for (let tries = 0; tries < 8; tries++) {
+          const x = (Math.random() - 0.5) * (CONFIG.mapSize - 60);
+          const z = (Math.random() - 0.5) * (CONFIG.mapSize - 60);
+          const before = this.resources.length;
+          const t = this.spawnResource(x, z);
+          if (t) break;
+          if (this.resources.length > before) break;
+        }
+      }
+    }
   }
 
   spawnProjectile(from, to, color, damage, target, splash = 0, owner = 'k0') {
@@ -808,7 +880,7 @@ export class Game {
     // hidden (fogged) enemies can't be clicked
     for (const u of this.units) if (!u.dead && u.mesh.visible) { u.mesh.updateMatrixWorld(); meshes.push(u.mesh); }
     for (const b of this.buildings) if (!b.dead && b.mesh.visible) { b.mesh.updateMatrixWorld(); meshes.push(b.mesh); }
-    for (const r of this.resources) if (!r.dead && r.amount > 0 && r.mesh.visible) { r.mesh.updateMatrixWorld(); meshes.push(r.mesh); }
+    for (const r of this.resources) if (this.resourceReady(r) && r.mesh.visible) { r.mesh.updateMatrixWorld(); meshes.push(r.mesh); }
     const hits = this.ray.intersectObjects(meshes, true);
     for (const h of hits) {
       let o = h.object;
@@ -845,8 +917,8 @@ export class Game {
       this.orderAttack(units, hit);
       return;
     }
-    // crystal tapped while workers selected -> harvest
-    if (hit && hit.kind === 'resource' && hit.amount > 0) {
+    // tree tapped while workers selected -> harvest
+    if (hit && hit.kind === 'resource' && this.resourceReady(hit)) {
       const workers = units.filter(u => u.type === 'worker');
       if (workers.length) { this.orderHarvest(workers, hit); return; }
       if (units.length) { const p = this.screenToGround(sx, sy); if (p) this.orderMove(units, p.x, p.z); return; }
@@ -929,7 +1001,7 @@ export class Game {
       const workers = units.filter(u => u.type === 'worker');
       const node = (hit && hit.kind === 'resource') ? hit : this.nearestResource(pX, pZ);
       if (workers.length && node) this.orderHarvest(workers, node);
-      else this.hookMsg('No crystal nearby — select a Worker first');
+      else this.hookMsg('No tree nearby — select a Worker first');
       return;
     }
     if (forced === 'move' || forced === 'return') {
@@ -941,10 +1013,10 @@ export class Game {
     }
 
     // --- smart contextual orders (right click / tap) ---
-    if (hit && hit.kind === 'resource' && hit.amount > 0) {
+    if (hit && hit.kind === 'resource' && this.resourceReady(hit)) {
       const workers = units.filter(u => u.type === 'worker');
       if (workers.length) { this.orderHarvest(workers, hit); return; }
-      // soldiers tapped crystal -> just move there
+      // soldiers tapped tree -> just move there
       this.orderMove(units, pX, pZ);
     } else if (hit && (hit.kind === 'unit' || hit.kind === 'building') && hit.owner !== units[0].owner) {
       this.orderAttack(units, hit);
@@ -1000,10 +1072,10 @@ export class Game {
       u.harvestTarget = node; u.target = null; u.objective = null; u.returning = false;
       u.hasOrder = true; u.gathering = 0; u.idleT = 0; u.path = null; u.fireAnchor = null; u.holdPosition = false;
       // if already full, go drop off first
-      if (u.carrying >= 10) { const hq = this.hqOf(u.owner); if (hq) { u.returning = true; u.tx = hq.x; u.tz = hq.z; } }
+      if (u.carrying >= (CONFIG.resource?.carryMax ?? 10)) { const hq = this.hqOf(u.owner); if (hq) { u.returning = true; u.tx = hq.x; u.tz = hq.z; } }
     }
-    this.spawnPing(node.x, node.z, 0x22d3ee);
-    this.hookMsg(`Harvesting crystals (${workers.length} worker${workers.length > 1 ? 's' : ''})`);
+    this.spawnPing(node.x, node.z, 0x4ade80);
+    this.hookMsg(`Chopping trees for logs (${workers.length} worker${workers.length > 1 ? 's' : ''})`);
   }
 
   orderReturn(workers, hq) {
@@ -1048,7 +1120,7 @@ export class Game {
     const out = [];
     for (const b of this.buildings) { if (b.dead || b === except) continue; out.push({ x: b.x, z: b.z, r: b.radius }); }
     for (const o of this.obstacles) out.push(o);
-    if (includeResources) for (const r of this.resources) { if (!r.dead && r.amount > 0) out.push({ x: r.x, z: r.z, r: r.radius + 0.2 }); }
+    if (includeResources) for (const r of this.resources) { if (this.resourceReady(r)) out.push({ x: r.x, z: r.z, r: r.radius + 0.2 }); }
     return out;
   }
 
@@ -1056,8 +1128,17 @@ export class Game {
     const H = CONFIG.mapSize / 2 - 1.5;
     if (Math.abs(x) > H || Math.abs(z) > H) return false;
     if (this.terrain && this.terrain.blocked(x, z)) return false; // river / mountain
-    for (const s of this.solids(true)) {
-      if (Math.hypot(x - s.x, z - s.z) < s.r + radius) return false;
+    let blocked = false;
+    this.eachBuildingNear(x, z, radius + 7, (b) => {
+      if (Math.hypot(x - b.x, z - b.z) < b.radius + radius) { blocked = true; return false; }
+    });
+    if (blocked) return false;
+    for (const o of this.obstacles) {
+      if (Math.hypot(x - o.x, z - o.z) < o.r + radius) return false;
+    }
+    for (const r of this.resources) {
+      if (!this.resourceReady(r)) continue;
+      if (Math.hypot(x - r.x, z - r.z) < r.radius + 0.2 + radius) return false;
     }
     for (const u of this.units) {
       if (u.dead || u === ignoreUnit) continue;
@@ -1085,7 +1166,7 @@ export class Game {
     this.cancelPlacement();
     const cost = type === 'turret' ? CONFIG.turretCost : type === 'wall' ? CONFIG.wallCost : CONFIG.barracksCost;
     const name = type === 'turret' ? 'Defense Turret' : type === 'wall' ? 'Wall' : 'Barracks';
-    if (this.players[this.humanId].crystals < cost) { this.hookMsg(`Need ${cost} crystals for ${name}`); return; }
+    if (this.players[this.humanId].logs < cost) { this.hookMsg(`Need ${cost} logs for ${name}`); return; }
     const ghostMat = new THREE.MeshBasicMaterial({ color: 0x4ade80, transparent: true, opacity: 0.4, depthWrite: false });
     const size = CONFIG.buildings[type].size;
     const ghost = type === 'turret'
@@ -1131,7 +1212,7 @@ export class Game {
     if (b) { b.rallyX = pl.x + 5; b.rallyZ = pl.z + 5; }
     // walls chain: keep ghost alive so players can drag a wall line quickly
     if (pl.type === 'wall') {
-      if (this.players[this.humanId].crystals < CONFIG.wallCost) { this.cancelPlacement(); return; }
+      if (this.players[this.humanId].logs < CONFIG.wallCost) { this.cancelPlacement(); return; }
       this.updateGhost(pl.x + CONFIG.buildings.wall.size + 0.1, pl.z);
       return;
     }
@@ -1199,20 +1280,20 @@ export class Game {
     const st = this.players[building.owner];
     const supplyUsed = this.units.filter(u => u.owner === building.owner && !u.dead).length;
     const supplyMax = this.supplyMax(building.owner);
-    if (st.crystals < cost) { if (building.owner === this.humanId) this.hookMsg('Not enough crystals'); return false; }
+    if (st.logs < cost) { if (building.owner === this.humanId) this.hookMsg('Not enough logs'); return false; }
     if (supplyUsed >= supplyMax) { if (building.owner === this.humanId) this.hookMsg('Supply blocked — build more Barracks'); return false; }
     if (building.queue.length >= 5) return false;
-    st.crystals -= cost;
+    st.logs -= cost;
     building.queue.push({ type, t: CONFIG.trainTime[type] ?? 6 });
     return true;
   }
 
   buildBarracks(owner, x, z) {
     const st = this.players[owner];
-    if (st.crystals < CONFIG.barracksCost) { if (owner === this.humanId) this.hookMsg('Need 150 crystals for Barracks'); return null; }
+    if (st.logs < CONFIG.barracksCost) { if (owner === this.humanId) this.hookMsg('Need 150 logs for Barracks'); return null; }
     x = THREE.MathUtils.clamp(x ?? this.camTarget.x + 6, -this.mapBound(6), this.mapBound(6));
     z = THREE.MathUtils.clamp(z ?? this.camTarget.z + 6, -this.mapBound(6), this.mapBound(6));
-    st.crystals -= CONFIG.barracksCost;
+    st.logs -= CONFIG.barracksCost;
     const b = this.spawnBuilding('barracks', owner, x, z);
     if (owner === this.humanId) { this.hookMsg('Barracks constructed'); this.setSelection([b]); }
     return b;
@@ -1220,10 +1301,10 @@ export class Game {
 
   buildTurret(owner, x, z) {
     const st = this.players[owner];
-    if (st.crystals < CONFIG.turretCost) { if (owner === this.humanId) this.hookMsg('Need 120 crystals for Turret'); return null; }
+    if (st.logs < CONFIG.turretCost) { if (owner === this.humanId) this.hookMsg('Need 120 logs for Turret'); return null; }
     x = THREE.MathUtils.clamp(x ?? this.camTarget.x + 6, -this.mapBound(6), this.mapBound(6));
     z = THREE.MathUtils.clamp(z ?? this.camTarget.z + 6, -this.mapBound(6), this.mapBound(6));
-    st.crystals -= CONFIG.turretCost;
+    st.logs -= CONFIG.turretCost;
     const b = this.spawnBuilding('turret', owner, x, z);
     if (owner === this.humanId) { this.hookMsg('Defense Turret online'); this.setSelection([b]); }
     return b;
@@ -1231,12 +1312,12 @@ export class Game {
 
   buildWall(owner, x, z) {
     const st = this.players[owner];
-    if (st.crystals < CONFIG.wallCost) { if (owner === this.humanId) this.hookMsg(`Need ${CONFIG.wallCost} crystals for Wall`); return null; }
+    if (st.logs < CONFIG.wallCost) { if (owner === this.humanId) this.hookMsg(`Need ${CONFIG.wallCost} logs for Wall`); return null; }
     x = THREE.MathUtils.clamp(x ?? this.camTarget.x + 6, -this.mapBound(6), this.mapBound(6));
     z = THREE.MathUtils.clamp(z ?? this.camTarget.z + 6, -this.mapBound(6), this.mapBound(6));
     const r = CONFIG.buildings.wall.size * 0.55;
     if (!this.isSpotFree(x, z, r)) { if (owner === this.humanId) this.hookMsg('Cannot build wall here — blocked'); return null; }
-    st.crystals -= CONFIG.wallCost;
+    st.logs -= CONFIG.wallCost;
     const b = this.spawnBuilding('wall', owner, x, z);
     // don't steal selection when chaining walls
     if (owner === this.humanId && this.placement?.type !== 'wall') this.setSelection([b]);
@@ -1384,20 +1465,20 @@ export class Game {
       const d = Math.hypot(u.x - x, u.z - z);
       if (d < bd) { bd = d; best = u; }
     });
-    // buildings are few: linear scan
-    for (const b of this.buildings) {
-      if (b.dead || b.owner === owner) continue;
-      if (!seesAll && !b.mesh.visible) continue;
+    // buildings via spatial hash (forts have hundreds of wall pieces)
+    this.eachBuildingNear(x, z, maxDist, (b) => {
+      if (b.owner === owner) return;
+      if (!seesAll && !b.mesh.visible) return;
       const d = Math.hypot(b.x - x, b.z - z);
       if (d < bd) { bd = d; best = b; }
-    }
+    });
     return best;
   }
 
   nearestResource(x, z) {
     let best = null, bd = 1e9;
     for (const r of this.resources) {
-      if (r.dead || r.amount <= 0) continue;
+      if (!this.resourceReady(r)) continue;
       const d = Math.hypot(r.x - x, r.z - z);
       if (d < bd) { bd = d; best = r; }
     }
@@ -1405,6 +1486,36 @@ export class Game {
   }
 
   hqOf(owner) { return this.buildings.find(b => b.owner === owner && b.type === 'hq' && !b.dead); }
+
+  // ---------- building spatial hash (forts = hundreds of wall pieces) ----------
+  // Rebuilt lazily whenever colliders change; keeps pathfinding, placement and
+  // turret target scans cheap even with ~1500 wall segments on the map.
+  buildingGrid() {
+    if (this._bg && this._bgVer === this.colliderVersion) return this._bg;
+    const c = 8, H = CONFIG.mapSize / 2, map = new Map();
+    for (const b of this.buildings) {
+      if (b.dead) continue;
+      const k = Math.floor((b.x + H) / c) * 1000 + Math.floor((b.z + H) / c);
+      let a = map.get(k);
+      if (!a) { a = []; map.set(k, a); }
+      a.push(b);
+    }
+    this._bg = map; this._bgVer = this.colliderVersion; this._bgCell = c;
+    return map;
+  }
+
+  eachBuildingNear(x, z, r, cb) {
+    const map = this.buildingGrid(), c = this._bgCell, H = CONFIG.mapSize / 2;
+    const ix0 = Math.floor((x - r + H) / c), ix1 = Math.floor((x + r + H) / c);
+    const iz0 = Math.floor((z - r + H) / c), iz1 = Math.floor((z + r + H) / c);
+    for (let ix = ix0; ix <= ix1; ix++) {
+      for (let iz = iz0; iz <= iz1; iz++) {
+        const a = map.get(ix * 1000 + iz);
+        if (!a) continue;
+        for (const b of a) { if (!b.dead && cb(b) === false) return; }
+      }
+    }
+  }
 
   // ---------- fog of war ----------
   fogCell(x, z) {
@@ -1489,14 +1600,15 @@ export class Game {
     this.autoPerf();
     this.updateCamera(dt);
 
-    // resource spin + float pulse
+    // trees sway gently; chopped stumps regrow on a timer (endless timber)
     for (const r of this.resources) {
-      if (r.dead) continue;
-      r.mesh.userData.spin.rotation.y += dt * 1.4;
-      r.mesh.userData.spin.position.y = 0.9 + Math.sin(this.time * 2 + r.id) * 0.12;
-      const s = 1 + Math.sin(this.time * 3 + r.id) * 0.05;
-      r.mesh.userData.spin.scale.setScalar(s);
+      if (r.dead || r.depleted) continue;
+      if (r.top && r.top.visible) {
+        r.top.rotation.y += dt * 0.25;
+        r.mesh.rotation.y += dt * 0.02;
+      }
     }
+    this.regrowTrees(dt);
     // particles
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const pt = this.particles[i];
@@ -1587,7 +1699,7 @@ export class Game {
       if (u.rig) this.updateWorkerRig(u, dt, moved);
       if (u.gem) {
         u.gem.visible = u.carrying > 0;
-        if (u.gem.visible) u.gem.rotation.y += dt * 3;
+        if (u.gem.visible) u.gem.rotation.x += dt * 3;
       }
       if (u.ring.visible) {
         const s = 1 + Math.sin(this.time * 5) * 0.06;
@@ -1607,13 +1719,13 @@ export class Game {
         this.projectiles.splice(i, 1);
         if (p.target && !p.target.dead) {
           this.burst(p.to.x, p.to.y, p.to.z, 0xfbbf24, 4, 3);
-          this.damage(p.target, p.damage);
+          this.damage(p.target, p.damage, p.owner);
           // artillery splash (grid query, not full scan)
           if (p.splash) {
             this.burst(p.to.x, p.to.y, p.to.z, 0xfb923c, 12, 7);
             const hitSplash = (e) => {
               if (e === p.target || e.dead || e.owner === p.owner) return;
-              if (Math.hypot(e.x - p.to.x, e.z - p.to.z) <= p.splash) this.damage(e, p.damage * 0.6);
+              if (Math.hypot(e.x - p.to.x, e.z - p.to.z) <= p.splash) this.damage(e, p.damage * 0.6, p.owner);
             };
             this.eachNear(p.to.x, p.to.z, p.splash + 1, hitSplash);
             for (const e of this.buildings) hitSplash(e);
@@ -1636,6 +1748,8 @@ export class Game {
         const from = new THREE.Vector3(b.x, this.gy(b.x, b.z) + 2.4, b.z);
         const to = new THREE.Vector3(e.x, this.gy(e.x, e.z) + 1.2, e.z);
         this.spawnProjectile(from, to, b.owner === this.humanId ? 0x93c5fd : 0xfca5a5, st.damage, e, 0, b.owner);
+      } else {
+        b.cd = 0.2 + Math.random() * 0.1; // idle: scan ~4x/s, not every frame
       }
     }
 
@@ -1679,32 +1793,45 @@ export class Game {
       u.path = null; u.repathT = 0;
     }
 
-    // WORKER harvesting
-    if (u.type === 'worker' && u.harvestTarget && !u.harvestTarget.dead && u.harvestTarget.amount > 0 && u.carrying < 10) {
+    // WORKER harvesting — continuous log runs: chop, haul to HQ, repeat.
+    // Trees shrink as they are chopped and regrow from a stump, so logging never ends.
+    const CARRY = CONFIG.resource?.carryMax ?? 10;
+    if (u.type === 'worker' && u.harvestTarget && this.resourceReady(u.harvestTarget) && u.carrying < CARRY) {
       const n = u.harvestTarget;
       if (Math.hypot(n.x - u.x, n.z - u.z) > n.radius + 0.9) { this.navigate(u, n.x, n.z, dt, n.radius + 0.9, 3.0); return; }
       u.path = null;
       u.gathering += dt;
       if (u.gathering >= CONFIG.units.worker.harvestTime) {
         u.gathering = 0;
-        const take = Math.min(CONFIG.units.worker.harvestRate, 10 - u.carrying, n.amount);
+        const take = Math.min(CONFIG.units.worker.harvestRate, CARRY - u.carrying, n.amount);
         u.carrying += take; n.amount -= take;
-        this.burst(n.x, 1.2, n.z, 0x22d3ee, 5, 2.5);
-        if (n.amount <= 0) { n.dead = true; this.scene.remove(n.mesh); u.harvestTarget = this.nearestResource(u.x, u.z); if (!u.harvestTarget) u.carrying = u.carrying; }
-        if (u.carrying >= 10) { const hq = this.hqOf(u.owner); if (hq) { u.returning = true; u.tx = hq.x; u.tz = hq.z; u.path = null; } }
+        this.syncTree(n);
+        this.burst(n.x, this.gy(n.x, n.z) + 1.5, n.z, 0x8b5a2b, 5, 2.5);
+        this.burst(n.x, this.gy(n.x, n.z) + 2.4, n.z, 0x4ade80, 4, 2);
+        if (n.amount <= 0) {
+          // chopped down -> stump, regrows after a while (never permanently gone)
+          n.amount = 0;
+          n.depleted = true;
+          const [rlo, rhi] = CONFIG.resource?.regrowTime ?? [55, 115];
+          n.regrowT = rlo + Math.random() * (rhi - rlo);
+          this.syncTree(n);
+          u.harvestTarget = this.nearestResource(u.x, u.z);
+        }
+        if (u.carrying >= CARRY) { const hq = this.hqOf(u.owner); if (hq) { u.returning = true; u.tx = hq.x; u.tz = hq.z; u.path = null; } }
       }
       return;
     }
     // return cargo
-    if (u.type === 'worker' && u.carrying > 0 && (u.returning || (!u.harvestTarget))) {
+    if (u.type === 'worker' && u.carrying > 0 && (u.returning || (!this.resourceReady(u.harvestTarget)))) {
       const hq = this.hqOf(u.owner);
       if (!hq) return;
       if (Math.hypot(hq.x - u.x, hq.z - u.z) > hq.radius + 0.9) { this.navigate(u, hq.x, hq.z, dt, hq.radius + 0.9, 3.0); return; }
       u.path = null;
-      this.players[u.owner].crystals += u.carrying;
+      this.players[u.owner].logs += u.carrying;
       u.carrying = 0; u.returning = false;
-      // resume harvest
-      if (!u.harvestTarget || u.harvestTarget.dead) u.harvestTarget = this.nearestResource(u.x, u.z);
+      // resume harvest — continuous collecting, never idle when trees remain
+      u.harvestTarget = this.nearestResource(u.x, u.z);
+      u.idleT = 0;
       return;
     }
 
@@ -1763,11 +1890,11 @@ export class Game {
     }
     if (u.type === 'worker' && !u.hasOrder && !u.target) {
       u.idleT = (u.idleT || 0) + dt;
-      if (u.idleT > 1.2 && u.carrying < 10) {
-        if (!u.harvestTarget || u.harvestTarget.dead || u.harvestTarget.amount <= 0) {
+      if (u.idleT > 0.6 && u.carrying < (CONFIG.resource?.carryMax ?? 10)) {
+        if (!this.resourceReady(u.harvestTarget)) {
           u.harvestTarget = this.nearestResource(u.x, u.z);
         }
-        if (u.harvestTarget) return; // updateUnit top will drive harvesting next frame
+        if (this.resourceReady(u.harvestTarget)) return; // updateUnit top will drive harvesting next frame
       }
       if (!u.hasOrder) return;
     }
@@ -1867,11 +1994,12 @@ export class Game {
     if (Math.abs(x) > H || Math.abs(z) > H) return true;
     if (this.terrain && this.terrain.blocked(x, z)) return true; // river / mountain
     const m = r * 0.3 + 0.35;
-    for (const b of this.buildings) {
-      if (b.dead) continue;
+    let hit = false;
+    this.eachBuildingNear(x, z, 7, (b) => {
       const dx = x - b.x, dz = z - b.z, rr = b.radius + m;
-      if (dx * dx + dz * dz < rr * rr) return true;
-    }
+      if (dx * dx + dz * dz < rr * rr) { hit = true; return false; }
+    });
+    if (hit) return true;
     for (const o of this.obstacles) {
       const dx = x - o.x, dz = z - o.z, rr = o.r + m;
       if (dx * dx + dz * dz < rr * rr) return true;
@@ -2116,9 +2244,11 @@ export class Game {
     return best;
   }
 
-  damage(ent, amt) {
+  damage(ent, amt, attacker) {
     if (ent.dead || this.over) return;
     ent.hp -= amt;
+    // each victim kingdom's own brain hears about the hit (no shared intel)
+    if (attacker && attacker !== ent.owner) this.onHit?.(ent, attacker, amt);
     if (ent.hp <= 0) {
       ent.hp = 0; ent.dead = true;
       const humanInvolved = this.isHuman(ent.owner);
