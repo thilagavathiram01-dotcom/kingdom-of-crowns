@@ -107,6 +107,11 @@ export class HUD {
     act('clear', () => game.clearSelection());
     act('zin', () => { game.camDist = Math.max(16, game.camDist - 10); });
     act('zout', () => { game.camDist = Math.min(190, game.camDist + 10); });
+    act('rail', () => { document.getElementById('app').classList.add('rail-hidden'); buzz(8); });
+    document.getElementById('rail-tab')?.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      document.getElementById('app').classList.remove('rail-hidden'); buzz(8);
+    });
     const panBtn = document.querySelector('#touchbar [data-act="pan"]');
     if (panBtn) panBtn.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();

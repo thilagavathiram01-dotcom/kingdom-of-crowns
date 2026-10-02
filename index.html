@@ -63,6 +63,7 @@
 
     <!-- Right command dock: real-RTS touch commands -->
     <nav id="touchbar" aria-label="Commands">
+      <div class="dock-label">Orders</div>
       <div class="dock-group">
         <button data-order="move" title="Move (M)" aria-label="Move"><span class="k">M</span></button>
         <button data-order="attack" title="Attack" aria-label="Attack"><span class="k">A</span></button>
@@ -70,6 +71,7 @@
         <button data-act="stop" title="Stop / Hold (X)" aria-label="Stop"></button>
       </div>
       <div class="dock-sep"></div>
+      <div class="dock-label">Select</div>
       <div class="dock-group">
         <button data-act="army" title="Select army (F)" aria-label="Select army"></button>
         <button data-act="workers" title="Select workers (G)" aria-label="Select workers"></button>
@@ -77,12 +79,16 @@
         <button data-act="clear" title="Deselect (Esc)" aria-label="Deselect"></button>
       </div>
       <div class="dock-sep"></div>
+      <div class="dock-label">View</div>
       <div class="dock-group dock-cam">
         <button data-act="pan" title="Drag = pan camera / select box" aria-label="Toggle pan mode" id="btn-pan"></button>
         <button data-act="zin" title="Zoom in" aria-label="Zoom in"></button>
         <button data-act="zout" title="Zoom out" aria-label="Zoom out"></button>
       </div>
+      <div class="dock-sep"></div>
+      <button data-act="rail" title="Hide command rail" aria-label="Hide rail" id="btn-rail">❯</button>
     </nav>
+    <button id="rail-tab" title="Show command rail" aria-label="Show rail">❮</button>
 
     <!-- Bottom command deck -->
     <footer id="bottombar">
