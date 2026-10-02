@@ -99,8 +99,13 @@ export class Game {
   }
 
   playerRank() {
+    // 30 powerOf scans x ~2000 entities ran twice a frame (AI + HUD):
+    // cache for a second, ranks don't need frame accuracy
+    if (this._rankCache && this.time - this._rankCache.t < 1.0) return this._rankCache.v;
     const order = this.kingdomIds().filter(id => this.players[id].alive).sort((a, b) => this.powerOf(b) - this.powerOf(a));
-    return { rank: order.indexOf(this.humanId) + 1, alive: order.length };
+    const v = { rank: order.indexOf(this.humanId) + 1, alive: order.length };
+    this._rankCache = { t: this.time, v };
+    return v;
   }
 
   layoutSlots(n) {
@@ -222,7 +227,10 @@ export class Game {
     const sun = new THREE.DirectionalLight(0xffd9b0, 1.7);
     sun.position.set(60, 95, 40);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    // touch GPUs get a smaller shadow map at boot (shadows stay ON, just cheaper);
+    // desktop keeps full 2048. The auto-perf governor adjusts from here.
+    const isTouchGPU = (typeof window !== 'undefined' && window.matchMedia?.('(hover: none)').matches) || ('ontouchstart' in window);
+    sun.shadow.mapSize.set(isTouchGPU ? 1024 : 2048, isTouchGPU ? 1024 : 2048);
     Object.assign(sun.shadow.camera, { left: -60, right: 60, top: 60, bottom: -60, near: 10, far: 320 });
     sun.shadow.bias = -0.0006;
     this.scene.add(sun);
@@ -281,10 +289,13 @@ export class Game {
 
   makeHealthBar(w = 1.6) {
     const grp = new THREE.Group();
-    const bg = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.18), new THREE.MeshBasicMaterial({ color: 0x111111, depthTest: false }));
-    const fg = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.18), new THREE.MeshBasicMaterial({ color: 0x4ade80, depthTest: false }));
+    const bg = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.18), new THREE.MeshBasicMaterial({ color: 0x111111, depthTest: false, transparent: true }));
+    const fg = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.18), new THREE.MeshBasicMaterial({ color: 0x4ade80, depthTest: false, transparent: true }));
     fg.position.z = 0.001;
     grp.add(bg, fg);
+    // hidden until damaged/selected: ~2000 entities x 2 transparent planes
+    // was always drawn + sorted every frame (a major mobile GPU cost)
+    grp.visible = false;
     grp.userData.set = (pct, friendly) => {
       fg.scale.x = Math.max(0.001, pct);
       fg.position.x = -w * (1 - pct) / 2;
@@ -966,9 +977,20 @@ export class Game {
   }
 
   setSelection(list) {
-    for (const s of this.selected) s.ring.visible = false;
+    for (const s of this.selected) {
+      s.ring.visible = false;
+      // hide full-HP building bars again once deselected (units are per-frame)
+      if (s.kind === 'building' && s.bar && s.hp >= s.maxHp) s.bar.visible = false;
+    }
     this.selected = list.filter(e => !e.dead);
-    for (const s of this.selected) s.ring.visible = true;
+    for (const s of this.selected) {
+      s.ring.visible = true;
+      if (s.bar && !s.dead) {
+        s.bar.visible = true;
+        s.bar.userData.set(s.hp / s.maxHp, s.owner === this.humanId);
+        s.bar.lookAt(this.camera.position);
+      }
+    }
     this.hooks.onSelect?.(this.selected);
   }
 
@@ -1236,6 +1258,9 @@ export class Game {
   }
 
   burst(x, y, z, color, n = 14, speed = 6) {
+    // particle flood-guard: big sieges used to spawn hundreds of live meshes
+    if (this.particles.length > 420) return;
+    if (this.particles.length > 260) n = Math.max(3, Math.ceil(n / 3));
     for (let i = 0; i < n; i++) {
       const m = new THREE.Mesh(new THREE.SphereGeometry(0.13 + Math.random() * 0.12, 6, 6),
         new THREE.MeshBasicMaterial({ color, transparent: true }));
@@ -1379,10 +1404,16 @@ export class Game {
       }
       this.hookMsg('Perf mode: tuned for smoothness');
     } else {
-      this.renderer.setPixelRatio(1);
-      if (this.sun) this.sun.castShadow = false;
+      // deepest perf level keeps shadows ON (never fully off): smaller shadow
+      // map + sub-1.0 resolution + no grass tufts instead
+      this.renderer.setPixelRatio(0.8);
+      if (this.sun) {
+        this.sun.castShadow = true;
+        this.sun.shadow.mapSize.set(512, 512);
+        if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+      }
       if (this.waterFx?.tufts) this.waterFx.tufts.visible = false;
-      this.hookMsg('Perf mode: shadows off for smoothness');
+      this.hookMsg('Perf mode: minimal detail, shadows kept');
     }
   }
 
@@ -1678,11 +1709,14 @@ export class Game {
         u.stuckT = 0;
       }
       u.lastX = u.x; u.lastZ = u.z;
-      // mesh sync (ride the terrain) + health bar
+      // mesh sync (ride the terrain) + health bar (shown only when hurt/selected)
       u.mesh.position.set(u.x, this.gy(u.x, u.z), u.z);
-      const pct = u.hp / u.maxHp;
-      u.bar.userData.set(pct, u.owner === this.humanId);
-      u.bar.lookAt(this.camera.position);
+      const showBar = u.hp < u.maxHp || u.ring.visible;
+      u.bar.visible = showBar;
+      if (showBar) {
+        u.bar.userData.set(u.hp / u.maxHp, u.owner === this.humanId);
+        u.bar.lookAt(this.camera.position);
+      }
       // face movement/target — smooth turn, no snap-spin when overlapping
       const look = u.target && !u.target.dead ? u.target : (u.hasOrder ? { x: u.tx, z: u.tz } : null);
       if (look) {
@@ -1728,7 +1762,7 @@ export class Game {
               if (Math.hypot(e.x - p.to.x, e.z - p.to.z) <= p.splash) this.damage(e, p.damage * 0.6, p.owner);
             };
             this.eachNear(p.to.x, p.to.z, p.splash + 1, hitSplash);
-            for (const e of this.buildings) hitSplash(e);
+            this.eachBuildingNear(p.to.x, p.to.z, p.splash + 1, hitSplash);
           }
         }
       }
@@ -1751,6 +1785,12 @@ export class Game {
       } else {
         b.cd = 0.2 + Math.random() * 0.1; // idle: scan ~4x/s, not every frame
       }
+    }
+
+    // billboard the few revealed building bars (damaged/selected only)
+    for (const b of this.buildings) {
+      if (b.dead || !b.bar || !b.bar.visible) continue;
+      b.bar.lookAt(this.camera.position);
     }
 
     // fog of war at ~6Hz
@@ -1946,7 +1986,8 @@ export class Game {
         b.x += 0.15; b.z += 0.1;
       }
     };
-    // rebuild grid from current positions, then relax
+    // rebuild grid from current positions, then relax (single rebuild:
+    // positions only move a few cm per frame, so one pass is enough)
     this.rebuildGrid();
     for (let pass = 0; pass < 2; pass++) {
       const seen = new Set();
@@ -1963,22 +2004,22 @@ export class Game {
           });
         }
       }
-      if (pass === 0) this.rebuildGrid();
     }
     for (const u of this.units) {
       if (u.dead) continue;
       // anchored firing units stay planted; skip building-push for them too
       if (!u.fireAnchor) {
-        for (const b of this.buildings) {
-          if (b.dead) continue;
+        // spatial-hash query: forts hold hundreds of wall pieces, a full scan
+        // here used to cost units x buildings every frame
+        this.eachBuildingNear(u.x, u.z, 7, (b) => {
           const dx = u.x - b.x, dz = u.z - b.z;
           const rr = b.radius + u.radius;
           // cheap reject before sqrt
-          if (Math.abs(dx) > rr || Math.abs(dz) > rr) continue;
+          if (Math.abs(dx) > rr || Math.abs(dz) > rr) return;
           const d = Math.hypot(dx, dz);
           if (d < rr && d > 0.0001) { u.x = b.x + (dx / d) * rr; u.z = b.z + (dz / d) * rr; }
           else if (d <= 0.0001) { u.x = b.x + rr; }
-        }
+        });
       }
       u.x = THREE.MathUtils.clamp(u.x, -H, H);
       u.z = THREE.MathUtils.clamp(u.z, -H, H);
@@ -2153,12 +2194,14 @@ export class Game {
     const blocked = (px, pz) => {
       if (this.terrain && this.terrain.blocked(px, pz)) return true;
       const ur = u.radius * 0.7;
-      for (const b of this.buildings) {
-        if (b.dead) continue;
+      // spatial-hash query: a full building scan here cost units x buildings per frame
+      let hit = false;
+      this.eachBuildingNear(px, pz, 6, (b) => {
         const ddx = px - b.x, ddz = pz - b.z, rr = b.radius + ur;
-        if (Math.abs(ddx) > rr || Math.abs(ddz) > rr) continue;
-        if (ddx * ddx + ddz * ddz < rr * rr) return true;
-      }
+        if (Math.abs(ddx) > rr || Math.abs(ddz) > rr) return;
+        if (ddx * ddx + ddz * ddz < rr * rr) { hit = true; return false; }
+      });
+      if (hit) return true;
       for (const o of this.obstacles) {
         const ddx = px - o.x, ddz = pz - o.z, rr = o.r + ur;
         if (Math.abs(ddx) > rr || Math.abs(ddz) > rr) continue;
@@ -2231,22 +2274,29 @@ export class Game {
     return 'moving';
   }
 
-  // nearest enemy BUILDING to breach through (walls first)
+  // nearest enemy BUILDING to breach through (walls first, spatial-hash query)
   breachTarget(u, maxD = 16) {
     let best = null, bd = maxD;
-    for (const b of this.buildings) {
-      if (b.dead || b.owner === u.owner) continue;
-      if (u.owner === this.humanId && !b.mesh.visible) continue;
+    const seesAll = u.owner !== this.humanId;
+    this.eachBuildingNear(u.x, u.z, maxD + 4, (b) => {
+      if (b.owner === u.owner) return;
+      if (!seesAll && !b.mesh.visible) return;
       const d = Math.hypot(b.x - u.x, b.z - u.z);
       const score = d + (b.type === 'wall' ? -4 : 0); // prefer chewing walls
       if (score < bd) { bd = score; best = b; }
-    }
+    });
     return best;
   }
 
   damage(ent, amt, attacker) {
     if (ent.dead || this.over) return;
     ent.hp -= amt;
+    // reveal + refresh the health bar on first damage (bars stay hidden at full HP)
+    if (ent.bar && ent.kind === 'building' && ent.hp > 0) {
+      ent.bar.visible = true;
+      ent.bar.userData.set(Math.max(0, ent.hp / ent.maxHp), this.isHuman(ent.owner));
+      ent.bar.lookAt(this.camera.position);
+    }
     // each victim kingdom's own brain hears about the hit (no shared intel)
     if (attacker && attacker !== ent.owner) this.onHit?.(ent, attacker, amt);
     if (ent.hp <= 0) {
