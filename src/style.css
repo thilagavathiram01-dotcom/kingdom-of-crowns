@@ -84,20 +84,72 @@ html.lock-landscape, html.lock-landscape body { overflow: hidden; overscroll-beh
   #app.gated > *:not(#rotate-gate) { transition: none; }
 }
 
-/* ===== Boot gate (model preload) ===== */
+/* ===== Boot gate: CoC-style splash + loader ===== */
 #boot-gate {
-  position: fixed; inset: 0; z-index: 998;
-  display: flex; align-items: center; justify-content: center;
-  background: radial-gradient(circle at 50% 30%, #17233c 0%, #0b0e14 70%);
+  position: fixed; inset: 0; z-index: 998; overflow: hidden;
+  background: #0b0e14;
+  display: flex; align-items: flex-end; justify-content: center;
 }
-.boot-card {
-  text-align: center; color: var(--text);
-  padding: 0 24px;
+#splash-img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; object-position: center;
+  background: #0b0e14;
 }
-.boot-card h2 { margin: 14px 0 6px; font-size: 22px; letter-spacing: .04em; }
-.boot-card p { margin: 0; color: var(--muted); font-size: 14px; }
-.boot-card .rotate-crown { animation: bootpulse 1.6s ease-in-out infinite; }
-@keyframes bootpulse { 0%, 100% { opacity: .45; transform: scale(.94); } 50% { opacity: 1; transform: scale(1.04); } }
+.splash-fallback {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(251,191,36,.28) 0%, transparent 55%),
+    linear-gradient(180deg, #274472 0%, #3b6ea5 30%, #7fb069 62%, #2d5a3d 100%);
+}
+#splash-img[src="/splash.jpg"] + .splash-fallback { display: block; }
+.splash-vignette {
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(180deg, rgba(0,0,0,.25) 0%, transparent 30%, transparent 55%, rgba(0,0,0,.72) 100%);
+}
+.boot-hud {
+  position: relative; z-index: 2; width: min(560px, 92vw);
+  padding: 0 0 calc(22px + env(safe-area-inset-bottom, 0px));
+  text-align: center;
+}
+.boot-logo {
+  font-weight: 900; letter-spacing: 1.5px; font-size: clamp(26px, 6vw, 42px);
+  color: #fff; text-shadow: 0 2px 0 #7c2d12, 0 4px 0 rgba(0,0,0,.45), 0 6px 24px rgba(0,0,0,.7);
+  margin-bottom: 14px;
+}
+.boot-logo span { color: #fde68a; }
+.boot-crown { color: var(--gold); }
+.boot-bar-wrap { width: 100%; }
+.boot-bar {
+  height: 22px; border-radius: 12px; overflow: hidden;
+  border: 2px solid rgba(255,255,255,.85);
+  background: rgba(0,0,0,.55);
+  box-shadow: 0 4px 18px rgba(0,0,0,.6), inset 0 2px 6px rgba(0,0,0,.6);
+}
+#boot-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(180deg, #fef08a 0%, #fbbf24 45%, #d97706 100%);
+  border-radius: 8px;
+  transition: width .25s ease;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.7);
+}
+.boot-row {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 6px; font-size: 13px; font-weight: 800; color: #fff;
+  text-shadow: 0 1px 3px rgba(0,0,0,.9);
+}
+#boot-pct { font-variant-numeric: tabular-nums; }
+.boot-tip {
+  margin: 10px 0 0; font-size: 12.5px; color: #e8edf5;
+  text-shadow: 0 1px 4px rgba(0,0,0,.9); opacity: .92; line-height: 1.5;
+}
+#btn-play {
+  margin-top: 14px; padding: 14px 30px; border-radius: 14px; border: 2px solid #fde68a;
+  background: linear-gradient(180deg, #4ade80, #16a34a);
+  color: #052e16; font-weight: 900; font-size: 17px; cursor: pointer;
+  box-shadow: 0 8px 28px rgba(0,0,0,.5);
+  animation: playpulse 1.4s infinite;
+}
+@keyframes playpulse { 50% { transform: scale(1.04); } }
 
 /* ============================================================
    RTS COMMAND HUD (RedSun / C&C style)

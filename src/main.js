@@ -69,6 +69,61 @@ window.visualViewport?.addEventListener('resize', () => syncOrientation());
 
 const canvas = document.getElementById('game-canvas');
 const bootGate = document.getElementById('boot-gate');
+const bootFill = document.getElementById('boot-fill');
+const bootLabel = document.getElementById('boot-label');
+const bootPct = document.getElementById('boot-pct');
+const bootTip = document.getElementById('boot-tip');
+const btnPlay = document.getElementById('btn-play');
+const bgMusic = document.getElementById('bg-music');
+const splashImg = document.getElementById('splash-img');
+
+// splash art: /public/splash.jpg overrides the gradient fallback.
+// If missing (404), hide the <img> so the painted fallback shows.
+if (splashImg) {
+  splashImg.addEventListener('error', () => splashImg.remove());
+  // cache-bust check: if splash.jpg is the vite 404 fallback, drop it
+  fetch((import.meta.env?.BASE_URL || '/') + 'splash.jpg', { method: 'HEAD' }).catch(() => {});
+}
+
+function setBoot(pct, label) {
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  if (bootFill) bootFill.style.width = p + '%';
+  if (bootPct) bootPct.textContent = p + '%';
+  if (label && bootLabel) bootLabel.textContent = label;
+}
+
+// CoC-style rotating tips while assets stream in
+const TIPS = [
+  'Scout with fast units, wall the bridges, then invade.',
+  'Earn logs every day by harvesting with workers.',
+  'Walls are cheap — fort your keep before the raids begin.',
+  'Barracks raise your supply and train your army.',
+  'Turrets guard the gates while your army marches out.',
+  'Destroy all 29 rival HQs to take the crown!',
+];
+let tipIdx = 0;
+const tipTimer = setInterval(() => {
+  tipIdx = (tipIdx + 1) % TIPS.length;
+  if (bootTip && bootGate?.isConnected) bootTip.textContent = TIPS[tipIdx];
+}, 4000);
+
+// background music: quiet, loops, starts on first gesture (mobile autoplay policy)
+let musicStarted = false;
+function startMusic() {
+  if (musicStarted || !bgMusic) return;
+  musicStarted = true;
+  try {
+    bgMusic.volume = 0.22;
+    bgMusic.loop = true;
+    const p = bgMusic.play();
+    if (p?.catch) p.catch(() => { musicStarted = false; });
+  } catch { musicStarted = false; }
+}
+['pointerdown', 'touchstart', 'keydown'].forEach((ev) =>
+  window.addEventListener(ev, startMusic, { once: false, passive: true })
+);
+// low-first-listen: try immediately too (desktop usually allows it)
+startMusic();
 
 let hud, ai;
 
@@ -76,22 +131,31 @@ let hud, ai;
 // never pop in as boxes. Any failure just keeps the original box workers.
 // Same for the KayKit castle/barracks/tower/wall models (~2MB).
 async function boot() {
+  setBoot(4, 'Summoning the armies…');
   let workerModels = null, buildingModels = null, adventurerModels = null;
   try {
     workerModels = await loadWorkerModels();
+    setBoot(32, 'Arming the cave men…');
   } catch (err) {
     console.warn('worker models unavailable — falling back to box workers', err);
+    setBoot(32, 'Arming the cave men…');
   }
   try {
     adventurerModels = await loadAdventurerModels();
+    setBoot(58, 'Raising the banners…');
   } catch (err) {
     console.warn('adventurer models unavailable — workers fall back to Cave Man rigs', err);
+    setBoot(58, 'Raising the banners…');
   }
   try {
     buildingModels = await loadBuildingModels();
+    setBoot(84, 'Building the castles…');
   } catch (err) {
     console.warn('building models unavailable — falling back to box buildings', err);
+    setBoot(84, 'Building the castles…');
   }
+
+  setBoot(92, 'Scouting the continent…');
 
   // never leave the player on a frozen splash: surface boot crashes visibly
   let game;
@@ -132,7 +196,26 @@ async function boot() {
       throw err;
     }
   }
-  bootGate?.remove();
-  loop();
+  setBoot(100, 'Ready for war!');
+  clearInterval(tipTimer);
+  startMusic();
+  // If the browser blocked autoplay, keep the splash with Tap to Play
+  // (also unlocks music) instead of dropping straight into the game.
+  const needTap = !!bgMusic && bgMusic.paused;
+  if (needTap && btnPlay) {
+    btnPlay.classList.remove('hidden');
+    setBoot(100, 'Ready — tap to play!');
+    btnPlay.addEventListener('click', () => {
+      startMusic();
+      try { bgMusic?.play()?.catch?.(() => {}); } catch {}
+      bootGate?.remove();
+      loop();
+    }, { once: true });
+    // also allow tapping anywhere on the splash
+    bootGate?.addEventListener('pointerdown', () => btnPlay.click(), { once: true });
+  } else {
+    bootGate?.remove();
+    loop();
+  }
 }
 boot();
