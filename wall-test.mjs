@@ -518,6 +518,16 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
     } catch (e) { detail += ` ${f}(unreadable)`; }
   }
   ok('both adventurer models have skeletons, walk/idle clips + textures', good === files.length, `good=${good}/2${detail}`);
+  // roof/team mask: same pixel size as the atlas, non-trivial coverage
+  const mp = 'public/models/buildings/team_mask.png';
+  let maskOk = false, maskDetail = '';
+  try {
+    const d = readFileSync(mp);
+    const w = d.readUInt32BE(16), h = d.readUInt32BE(20);
+    maskOk = w === 1024 && h === 1024 && d.length > 1000;
+    if (!maskOk) maskDetail = `${w}x${h} ${d.length}B`;
+  } catch (e) { maskDetail = 'unreadable'; }
+  ok('roof team mask ships at atlas size', maskOk, maskDetail);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

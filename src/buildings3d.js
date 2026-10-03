@@ -36,32 +36,51 @@ export async function loadBuildingModels() {
   new THREE.Box3().setFromObject(wall.scene).getSize(wsize);
   lib.wall = wall.scene;
   lib.sizes.wall = wsize;
-  lib.tints = new Map();
+  lib.roofMats = new Map();
+  // team mask shares the atlas orientation (flipY off, like GLB textures)
+  lib.teamMask = await new THREE.TextureLoader().loadAsync(base + 'models/buildings/team_mask.png');
+  lib.teamMask.flipY = false;
+  lib.teamMask.colorSpace = THREE.NoColorSpace;
   LIB = lib;
   return lib;
 }
 
-// Tint cache: one material per (source texture, kingdom colour). The tint
-// multiplies the baked atlas, so shading detail survives while the whole
-// building reads in team colour.
-function tintedMaterial(srcMat, hex) {
+// Roof/team mask: white exactly where a variant's UVs leave the shared
+// stone/wood texels (computed offline by diffing the 4 baked variants).
+// Stone stays natural; only roofs, trims and pennants take the kingdom dye.
+function roofTintMaterial(srcMat, hex) {
   const key = srcMat.uuid + ':' + hex;
-  let m = LIB.tints.get(key);
+  let m = LIB.roofMats.get(key);
   if (m) return m;
   m = new THREE.MeshStandardMaterial({
     map: srcMat.map || null,
     roughness: srcMat.roughness ?? 0.9,
     metalness: 0.0,
-    color: new THREE.Color(0xffffff).lerp(new THREE.Color(hex), 0.8),
   });
-  LIB.tints.set(key, m);
+  const tint = { value: new THREE.Color(hex) };
+  m.userData.tint = { tint, mask: LIB.teamMask };
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uRoof = tint;
+    shader.uniforms.uRoofMask = { value: LIB.teamMask };
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec3 uRoof;\nuniform sampler2D uRoofMask;')
+      .replace('#include <map_fragment>', `#include <map_fragment>
+\t{
+\t\tvec4 roofM = texture2D( uRoofMask, vMapUv );
+\t\tfloat lum = dot( diffuseColor.rgb, vec3( 0.299, 0.587, 0.114 ) );
+\t\tdiffuseColor.rgb = mix( diffuseColor.rgb, uRoof * ( 0.34 + lum * 1.5 ), clamp( roofM.r, 0.0, 1.0 ) );
+\t}`);
+  };
+  m.customProgramCacheKey = () => 'bld-roof-v1';
+  LIB.roofMats.set(key, m);
   return m;
 }
 
 // Clone a variant, stretched so its widest horizontal extent is targetW
 // metres. Uniform scale keeps the low-poly proportions intact. The source
 // size is returned too, so elastic walls can stretch per-axis to their slot.
-// Every mesh is tinted toward the kingdom colour for instant ownership read.
+// Roofs/trims take the kingdom colour through the team mask; stone and wood
+// stay natural. Walls keep raw stone (plus the team cap built in game code).
 export function buildingModel(type, variant, targetW, tintHex) {
   if (!LIB) return null;
   const pool = type === 'wall' ? [LIB.wall] : LIB[type];
@@ -69,10 +88,10 @@ export function buildingModel(type, variant, targetW, tintHex) {
   const src = pool[variant % pool.length];
   const size = LIB.sizes[type];
   const model = src.clone(true);
-  if (tintHex !== undefined && tintHex !== null) {
+  if (type !== 'wall' && tintHex !== undefined && tintHex !== null) {
     model.traverse((o) => {
       if ((o.isMesh || o.isSkinnedMesh) && o.material?.map) {
-        o.material = tintedMaterial(o.material, tintHex);
+        o.material = roofTintMaterial(o.material, tintHex);
       }
     });
   }
