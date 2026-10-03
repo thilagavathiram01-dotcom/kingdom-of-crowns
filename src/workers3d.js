@@ -229,8 +229,9 @@ export const ADVENTURER_SCALE = 0.85; // ~1.9m tall, matches the old rig
 
 let ADVENTURERS = null;
 
-// Tunic + pants bones whose vertices take the kingdom dye.
-const DYE_JOINTS = new Set(['hips', 'spine', 'chest', 'upperlegl', 'upperlegr', 'lowerlegl', 'lowerlegr']);
+// Tunic + pants + hood bones whose vertices take the kingdom dye. The head
+// bone is included so hoods read in team colour; skin hands/boots stay baked.
+const DYE_JOINTS = new Set(['hips', 'spine', 'chest', 'upperlegl', 'upperlegr', 'lowerlegl', 'lowerlegr', 'head']);
 
 // Per-vertex dye mask from skin weights (same technique as the Cave Man
 // tunic mask). Geometry is shared across clones, so the mask is baked once.

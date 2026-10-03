@@ -524,11 +524,11 @@ export class Game {
   }
 
   // KayKit visual for a building, or null -> caller builds the box fallback.
-  // The 4 baked team colors cycle by kingdom index; exact identity stays on
-  // flags, trim, minimap and unit colors.
+  // The 4 baked team colors cycle by kingdom index, then the whole model is
+  // tinted toward the exact kingdom colour; flags/trim/minimap agree.
   buildingModelFor(type, owner, targetW) {
     if (!this.buildingModels) return null;
-    return buildingModel(type, (this.players[owner]?.idx ?? 0) % 4, targetW);
+    return buildingModel(type, (this.players[owner]?.idx ?? 0) % 4, targetW, this.teamColor(owner));
   }
 
   spawnBuilding(type, owner, x, z, rot = 0, len) {
