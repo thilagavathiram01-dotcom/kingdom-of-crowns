@@ -8,7 +8,18 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>War of Crowns — 30 Kingdoms RTS</title>
+  <link rel="preload" as="image" href="splash.jpg" fetchpriority="high" />
+  <link rel="preload" as="audio" href="audio/fantasy-adventure-quest.mp3" />
   <link rel="stylesheet" href="/src/style.css" />
+  <script>
+    // Early rotate gate: run before first paint so portrait phones never
+    // flash the splash loader (no flicker). Module JS re-syncs on resize.
+    try {
+      var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      var portrait = window.innerHeight > window.innerWidth;
+      if (coarse && portrait) document.documentElement.classList.add('want-landscape');
+    } catch (e) {}
+  </script>
 </head>
 <body>
   <div id="app">
@@ -17,18 +28,17 @@
     <!-- boot gate: CoC-style splash + loader, stays until all assets loaded -->
     <div id="boot-gate" aria-live="polite">
       <div class="splash-fallback" aria-hidden="true"></div>
-      <img id="splash-img" src="splash.jpg" alt="" aria-hidden="true" />
+      <img id="splash-img" src="splash.jpg" alt="" aria-hidden="true" fetchpriority="high" decoding="async" />
       <div class="splash-vignette" aria-hidden="true"></div>
       <div class="boot-hud">
         <div class="boot-loading">Loading</div>
         <div class="boot-bar-wrap">
           <div class="boot-bar"><div id="boot-fill"></div></div>
-          <div class="boot-row"><span id="boot-label">Summoning the armies…</span><span id="boot-pct">0%</span></div>
+          <div class="boot-row"><span id="boot-pct">0%</span></div>
         </div>
-        <p class="boot-tip" id="boot-tip">Scout with fast units, wall the bridges, then invade.</p>
         <button id="btn-play" class="hidden" type="button">⚔ Tap to Play ♛</button>
       </div>
-      <audio id="bg-music" src="audio/fantasy-adventure-quest.mp3" loop preload="auto"></audio>
+      <audio id="bg-music" loop preload="auto"></audio>
     </div>
 
     <!-- Landscape gate: this RTS needs a wide screen (phones + tablets) -->

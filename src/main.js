@@ -41,6 +41,8 @@ function syncOrientation(attemptLock = false) {
   const show = needsLandscape();
   rotateGate?.classList.toggle('hidden', !show);
   document.documentElement.classList.toggle('lock-landscape', show);
+  // keep early pre-paint class in sync: no splash/rotate flicker while loading
+  document.documentElement.classList.toggle('want-landscape', show);
   // hard-block canvas input while the gate is up (RTS UI is landscape-only)
   if (appRoot) appRoot.classList.toggle('gated', show);
   if (show && attemptLock && !lockedLandscape) requestLandscapeLock();
@@ -70,9 +72,7 @@ window.visualViewport?.addEventListener('resize', () => syncOrientation());
 const canvas = document.getElementById('game-canvas');
 const bootGate = document.getElementById('boot-gate');
 const bootFill = document.getElementById('boot-fill');
-const bootLabel = document.getElementById('boot-label');
 const bootPct = document.getElementById('boot-pct');
-const bootTip = document.getElementById('boot-tip');
 const btnPlay = document.getElementById('btn-play');
 const bgMusic = document.getElementById('bg-music');
 const splashImg = document.getElementById('splash-img');
@@ -82,93 +82,118 @@ const splashImg = document.getElementById('splash-img');
 const BASE = import.meta.env?.BASE_URL || '/';
 if (splashImg) {
   const want = BASE + 'splash.jpg';
-  if (!String(splashImg.getAttribute('src') || '').endsWith('splash.jpg')) splashImg.src = want;
-  else if (new URL(splashImg.src, location.href).pathname !== new URL(want, location.href).pathname) splashImg.src = want;
+  try {
+    if (!String(splashImg.getAttribute('src') || '').endsWith('splash.jpg')) splashImg.src = want;
+  } catch { splashImg.src = want; }
+  // wait for full decode before advancing past 5% (no half-painted art)
+  try { if (splashImg.decode) splashImg.decode().catch(() => {}); } catch {}
   splashImg.addEventListener('error', () => {
-    // one retry with absolute origin (fixes base-path mismatches on Pages preview)
     const abs = new URL('splash.jpg', location.href).href;
     if (splashImg.src !== abs) splashImg.src = abs;
-    else splashImg.style.display = 'none'; // last resort: gradient fallback
+    else splashImg.style.display = 'none';
   });
 }
-if (bgMusic) {
-  try {
-    const wantAudio = BASE + 'audio/fantasy-adventure-quest.mp3';
-    if (!bgMusic.getAttribute('src')?.includes('fantasy-adventure')) bgMusic.src = wantAudio;
-  } catch {}
-}
 
-function setBoot(pct, label) {
+function setBoot(pct) {
   const p = Math.max(0, Math.min(100, Math.round(pct)));
   if (bootFill) bootFill.style.width = p + '%';
   if (bootPct) bootPct.textContent = p + '%';
-  if (label && bootLabel) bootLabel.textContent = label;
 }
 
-// CoC-style rotating tips while assets stream in
-const TIPS = [
-  'Scout with fast units, wall the bridges, then invade.',
-  'Earn logs every day by harvesting with workers.',
-  'Walls are cheap — fort your keep before the raids begin.',
-  'Barracks raise your supply and train your army.',
-  'Turrets guard the gates while your army marches out.',
-  'Destroy all 29 rival HQs to take the crown!',
-];
-let tipIdx = 0;
-const tipTimer = setInterval(() => {
-  tipIdx = (tipIdx + 1) % TIPS.length;
-  if (bootTip && bootGate?.isConnected) bootTip.textContent = TIPS[tipIdx];
-}, 4000);
-
-// background music: quiet, loops, starts on first gesture (mobile autoplay policy)
-let musicStarted = false;
-function startMusic() {
-  if (musicStarted || !bgMusic) return;
-  musicStarted = true;
+// ---- background music: fully fetched during splash, loops from splash ----
+// Fully download the mp3 (6.4MB) with progress into a blob URL so playback
+// never stalls mid-game. Muted autoplay is allowed without gesture, so we
+// start muted on the splash and unmute on first gesture at low volume.
+let musicURL = null;
+let musicReady = false;
+async function fetchMusic(onProgress) {
+  const url = BASE + 'audio/fantasy-adventure-quest.mp3';
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('music HTTP ' + res.status);
+  const total = Number(res.headers.get('content-length') || 0);
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const blob = await res.blob();
+    musicURL = URL.createObjectURL(blob);
+    onProgress?.(1);
+    return;
+  }
+  const chunks = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.byteLength;
+    if (total) onProgress?.(got / total);
+  }
+  musicURL = URL.createObjectURL(new Blob(chunks, { type: 'audio/mpeg' }));
+  onProgress?.(1);
+}
+function wireMusic() {
+  if (!bgMusic || !musicURL) return;
+  if (bgMusic.src !== musicURL) bgMusic.src = musicURL;
+  bgMusic.loop = true;
+  bgMusic.volume = 0.22;
+  bgMusic.muted = true; // allowed to autoplay from the splash itself
+  bgMusic.play().catch(() => {});
+  musicReady = true;
+}
+function unmuteMusic() {
+  if (!bgMusic || !musicReady) return;
   try {
+    bgMusic.muted = false;
     bgMusic.volume = 0.22;
-    bgMusic.loop = true;
-    const p = bgMusic.play();
-    if (p?.catch) p.catch(() => { musicStarted = false; });
-  } catch { musicStarted = false; }
+    if (bgMusic.paused) bgMusic.play().catch(() => {});
+  } catch {}
+  document.documentElement.classList.remove('want-landscape');
 }
 ['pointerdown', 'touchstart', 'keydown'].forEach((ev) =>
-  window.addEventListener(ev, startMusic, { once: false, passive: true })
+  window.addEventListener(ev, unmuteMusic, { passive: true })
 );
-// low-first-listen: try immediately too (desktop usually allows it)
-startMusic();
 
 let hud, ai;
 
-// worker models are ~1.6MB of glTF: preload before the first frame so workers
-// never pop in as boxes. Any failure just keeps the original box workers.
-// Same for the KayKit castle/barracks/tower/wall models (~2MB).
+// All assets (models + music) fully fetched on the splash: the game only
+// starts at 100% so nothing stalls mid-game for lack of resources.
 async function boot() {
-  setBoot(4, 'Summoning the armies…');
+  setBoot(2);
+  // 1) splash image decode (no half-painted art)
+  try { await splashImg?.decode?.(); } catch {}
+  setBoot(6);
+  // 2) music fully fetched with progress (6% -> 20%), wired muted so it
+  // loops from the splash itself even before the first tap
+  try {
+    await fetchMusic((f) => setBoot(6 + f * 14));
+    wireMusic();
+  } catch (err) {
+    console.warn('bg music unavailable', err);
+  }
+  setBoot(20);
   let workerModels = null, buildingModels = null, adventurerModels = null;
   try {
     workerModels = await loadWorkerModels();
-    setBoot(32, 'Arming the cave men…');
+    setBoot(44);
   } catch (err) {
     console.warn('worker models unavailable — falling back to box workers', err);
-    setBoot(32, 'Arming the cave men…');
+    setBoot(44);
   }
   try {
     adventurerModels = await loadAdventurerModels();
-    setBoot(58, 'Raising the banners…');
+    setBoot(64);
   } catch (err) {
     console.warn('adventurer models unavailable — workers fall back to Cave Man rigs', err);
-    setBoot(58, 'Raising the banners…');
+    setBoot(64);
   }
   try {
     buildingModels = await loadBuildingModels();
-    setBoot(84, 'Building the castles…');
+    setBoot(86);
   } catch (err) {
     console.warn('building models unavailable — falling back to box buildings', err);
-    setBoot(84, 'Building the castles…');
+    setBoot(86);
   }
 
-  setBoot(92, 'Scouting the continent…');
+  setBoot(93);
 
   // never leave the player on a frozen splash: surface boot crashes visibly
   let game;
@@ -209,27 +234,24 @@ async function boot() {
       throw err;
     }
   }
-  setBoot(100, 'Ready for war!');
-  clearInterval(tipTimer);
-  startMusic();
+  setBoot(100);
   // CoC rule: enter the game ONLY at 100%. Fade the splash, then start loop.
   const finishBoot = () => {
+    unmuteMusic();
     try { bgMusic?.play()?.catch?.(() => {}); } catch {}
     bootGate?.classList.add('done');
     setTimeout(() => bootGate?.remove(), 500);
     loop();
   };
-  // If the browser blocked autoplay, keep the splash with Tap to Play
-  // (also unlocks music) instead of dropping straight into the game.
-  const needTap = !!bgMusic && bgMusic.paused;
+  // Autoplay policy: music already loops muted from the splash; if still
+  // paused at 100%, one tap unlocks sound + enters (no earlier entry).
+  const needTap = !!bgMusic && bgMusic.paused && musicReady;
   if (needTap && btnPlay) {
     btnPlay.classList.remove('hidden');
-    setBoot(100, 'Ready — tap to play!');
+    setBoot(100);
     btnPlay.addEventListener('click', () => {
-      startMusic();
       finishBoot();
     }, { once: true });
-    // also allow tapping anywhere on the splash (only now that we're at 100%)
     bootGate?.addEventListener('pointerdown', () => btnPlay.click(), { once: true });
   } else {
     // small beat at 100% so players actually see the full bar like CoC
