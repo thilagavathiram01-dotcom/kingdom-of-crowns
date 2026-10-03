@@ -499,22 +499,25 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
     g.buildings.filter(b => b.type === 'wall').every(w => !g.buildingBlocks(w, u.x, u.z, u.radius)));
 }
 
-// ---------- 20. peasant worker models ship with skeletons + textures ----------
+// ---------- 20. adventurer worker models ship with skeletons, clips + textures ----------
 {
-  const files = ['peasant_1', 'peasant_2', 'peasant_3', 'peasant_4', 'peasant_5', 'peasant_6'];
+  const files = ['rogue_hooded', 'rogue'];
+  const wantClips = ['Idle', 'Walking_A', 'Walking_B'];
   let good = 0, detail = '';
   for (const f of files) {
     try {
-      const d = readFileSync(`public/models/people/${f}.glb`);
+      const d = readFileSync(`public/models/workers/${f}.glb`);
       const jl = d.readUInt32LE(12);
       const j = JSON.parse(d.subarray(20, 20 + jl).toString('utf8'));
       const joints = j.skins?.[0]?.joints?.length || 0;
       const imgs = j.images?.length || 0;
-      if (joints >= 30 && imgs >= 1) good++;
-      else detail += ` ${f}(joints=${joints},images=${imgs})`;
+      const clips = new Set((j.animations || []).map(a => a.name));
+      const missing = wantClips.filter(c => !clips.has(c));
+      if (joints >= 30 && imgs >= 1 && !missing.length) good++;
+      else detail += ` ${f}(joints=${joints},images=${imgs},missing=${missing.join('|')})`;
     } catch (e) { detail += ` ${f}(unreadable)`; }
   }
-  ok('all 6 peasant models have full skeletons + textures', good === files.length, `good=${good}/6${detail}`);
+  ok('both adventurer models have skeletons, walk/idle clips + textures', good === files.length, `good=${good}/2${detail}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

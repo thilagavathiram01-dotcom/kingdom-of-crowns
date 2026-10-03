@@ -177,8 +177,17 @@ export function createWorkerRig(colorHex, scale = WORKER_SCALE) {
 
 // Crossfades the shipped idle wave with a procedural stride. The mixer runs
 // first so the leg bones we write below win the frame (weight = 1 - walkW).
+// Rigs with real walk/idle clips (adventurers) crossfade the clips instead.
 export function updateWorkerRig(rig, dt, walking) {
   rig.walkW += ((walking ? 1 : 0) - rig.walkW) * Math.min(1, dt * 7);
+  if (rig.walkAction) {
+    rig.walkAction.weight = rig.walkW;
+    if (rig.idleAction) rig.idleAction.weight = 1 - rig.walkW;
+    if (rig.mixer) rig.mixer.update(dt);
+    rig.root.position.y = rig.lift;
+    rig.root.rotation.z = 0;
+    return;
+  }
   if (rig.action) rig.action.weight = 1 - rig.walkW;
   if (rig.mixer) rig.mixer.update(dt);
 
@@ -200,52 +209,67 @@ export function updateWorkerRig(rig, dt, walking) {
 }
 
 // ---------------------------------------------------------------------------
-// Medieval people (CraftPix peasants, converted FBX -> GLB): the worker skin.
-// T-pose, 41-bone humanoid, no clips — the same procedural stride above drives
-// it, so no animation assets are needed. Toe-bone analysis shows the models
-// face +Z, matching the game's atan2(dx, dz) yaw with no extra facing fix.
-// Colours are baked (no per-kingdom dye); the team underglow disc + minimap
-// keep ownership readable.
-const PEOPLE_FILES = ['peasant_1', 'peasant_2', 'peasant_3', 'peasant_4', 'peasant_5', 'peasant_6'];
-export const PEOPLE_SCALE = 1.0; // ~1.8m tall at 1:1, matches the old rig
+// KayKit adventurers (Rogue_Hooded + Rogue, clips stripped to Idle / Walk /
+// PickUp / Cheer / Death): the worker skin. Real walk + idle clips replace
+// the procedural stride, so workers read clearly at RTS zoom. Toe-bone
+// analysis shows the models face +Z, matching the game's atan2(dx, dz) yaw
+// with no extra facing fix. Colours are baked; the team underglow disc +
+// minimap keep ownership readable.
+const ADVENTURER_FILES = ['rogue_hooded', 'rogue'];
+const WALK_CLIPS = ['Walking_A', 'Walking_B'];
+export const ADVENTURER_SCALE = 0.85; // ~1.9m tall, matches the old rig
 
-let PEOPLE = null;
+let ADVENTURERS = null;
 
-export async function loadPeopleModels() {
+export async function loadAdventurerModels() {
   const base = basePath();
   const loader = new GLTFLoader();
   const variants = [];
-  for (const file of PEOPLE_FILES) {
-    const gltf = await loader.loadAsync(base + 'models/people/' + file + '.glb');
+  for (const file of ADVENTURER_FILES) {
+    const gltf = await loader.loadAsync(base + 'models/workers/' + file + '.glb');
     const scene = gltf.scene;
     scene.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) { o.castShadow = true; } });
     scene.updateMatrixWorld(true);
     const lift = -new THREE.Box3().setFromObject(scene).min.y;
-    variants.push({ scene, lift });
+    const clips = new Map(gltf.animations.map((c) => [c.name, c]));
+    variants.push({ scene, lift, clips });
   }
-  PEOPLE = { variants, next: 0 };
-  return PEOPLE;
+  ADVENTURERS = { variants, next: 0, walk: 0 };
+  return ADVENTURERS;
 }
 
-// Same rig shape as the Cave Man (root/lift/phase/walkW/bones, no mixer), so
-// updateWorkerRig, the far-LOD box swap and facing all work unchanged.
-export function createPeopleRig(scale = PEOPLE_SCALE) {
-  if (!PEOPLE) return null;
-  const v = PEOPLE.variants[PEOPLE.next++ % PEOPLE.variants.length];
+// Same rig shape as the Cave Man (root/lift/phase/walkW/bones/mixer), plus
+// idle + walk actions. updateWorkerRig crossfades the real clips instead of
+// the procedural stride when walkAction is present.
+export function createAdventurerRig(scale = ADVENTURER_SCALE) {
+  if (!ADVENTURERS) return null;
+  const v = ADVENTURERS.variants[ADVENTURERS.next++ % ADVENTURERS.variants.length];
   const model = skeletonClone(v.scene);
-  const find = (n) => model.getObjectByName(n);
-  const bones = [find('Upperarm_L'), find('Upperarm_R'), find('Thigh_L'), find('Thigh_R')];
   model.scale.setScalar(scale);
   const root = new THREE.Group();
   root.position.y = v.lift * scale;
   root.add(model);
-  return {
+  const rig = {
     root,
     lift: v.lift * scale,
-    phase: Math.random() * Math.PI * 2,
+    phase: 0,
     walkW: 0,
-    bones,
+    bones: [null, null, null, null],
     mixer: null,
     action: null,
+    idleAction: null,
+    walkAction: null,
   };
+  const idle = v.clips.get('Idle');
+  const walk = v.clips.get(WALK_CLIPS[ADVENTURERS.walk++ % WALK_CLIPS.length]) || v.clips.get('Walking_A');
+  if (idle && walk) {
+    rig.mixer = new THREE.AnimationMixer(model);
+    rig.idleAction = rig.mixer.clipAction(idle);
+    rig.walkAction = rig.mixer.clipAction(walk);
+    rig.idleAction.play();
+    rig.walkAction.play();
+    rig.idleAction.weight = 1;
+    rig.walkAction.weight = 0;
+  }
+  return rig;
 }

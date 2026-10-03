@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Game } from './game.js';
 import { AIManager } from './ai.js';
 import { HUD } from './ui.js';
-import { loadWorkerModels, loadPeopleModels } from './workers3d.js';
+import { loadWorkerModels, loadAdventurerModels } from './workers3d.js';
 import { loadBuildingModels } from './buildings3d.js';
 
 // visible error surface: never freeze silently — show what broke
@@ -76,16 +76,16 @@ let hud, ai;
 // never pop in as boxes. Any failure just keeps the original box workers.
 // Same for the KayKit castle/barracks/tower/wall models (~2MB).
 async function boot() {
-  let workerModels = null, buildingModels = null, peopleModels = null;
+  let workerModels = null, buildingModels = null, adventurerModels = null;
   try {
     workerModels = await loadWorkerModels();
   } catch (err) {
     console.warn('worker models unavailable — falling back to box workers', err);
   }
   try {
-    peopleModels = await loadPeopleModels();
+    adventurerModels = await loadAdventurerModels();
   } catch (err) {
-    console.warn('people models unavailable — workers fall back to Cave Man rigs', err);
+    console.warn('adventurer models unavailable — workers fall back to Cave Man rigs', err);
   }
   try {
     buildingModels = await loadBuildingModels();
@@ -100,7 +100,7 @@ async function boot() {
       onSelect: (sel) => hud?.onSelect(sel),
       onMessage: (t) => hud?.message(t),
       onGameOver: (win, time) => hud?.showGameOver(win, time),
-    }, { workerModels, buildingModels, peopleModels });
+    }, { workerModels, buildingModels, adventurerModels });
   } catch (err) {
     bootGate?.remove();
     showError(err);

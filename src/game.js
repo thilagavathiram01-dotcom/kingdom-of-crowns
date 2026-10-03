@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG, COLORS, kingdomColor, kingdomName } from './config.js';
 import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite } from './terrain.js';
-import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE, createPeopleRig, PEOPLE_SCALE } from './workers3d.js';
+import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE, createAdventurerRig, ADVENTURER_SCALE } from './workers3d.js';
 import { buildingModel } from './buildings3d.js';
 
 let UID = 1;
@@ -15,8 +15,8 @@ export class Game {
     this.hooks = hooks; // { onSelect, onResources, onMessage, onGameOver }
     // skinned Cave Man worker models, or null -> plain box workers
     this.workerModels = !!assets.workerModels;
-    // medieval peasant models for workers, or null -> Cave Man / box fallback
-    this.peopleModels = !!assets.peopleModels;
+    // medieval adventurer models for workers, or null -> Cave Man / box fallback
+    this.adventurerModels = !!assets.adventurerModels;
     // KayKit castle/barracks/tower/wall models, or null -> procedural boxes
     this.buildingModels = !!assets.buildingModels;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -419,11 +419,11 @@ export class Game {
     const g = new THREE.Group();
     let body;
     let rig = null;
-    // Cave Man rig drives the club/spear troops; workers wear the peasant
+    // Cave Man rig drives the club/spear troops; workers wear the adventurer
     // models first and fall back to the Cave Man rig, then plain boxes.
     const CAVEMAN = { worker: 1, brute: 1.16, hunter: 0.94 };
     const cav = CAVEMAN[type];
-    if (type === 'worker' && this.peopleModels) rig = createPeopleRig(PEOPLE_SCALE);
+    if (type === 'worker' && this.adventurerModels) rig = createAdventurerRig(ADVENTURER_SCALE);
     if (!rig && cav && this.workerModels) rig = createWorkerRig(this.teamColor(owner), WORKER_SCALE * cav);
     const mat = new THREE.MeshStandardMaterial({ color: this.teamColor(owner), roughness: 0.6 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
