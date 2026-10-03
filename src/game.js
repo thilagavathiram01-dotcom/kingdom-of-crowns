@@ -423,7 +423,7 @@ export class Game {
     // models first and fall back to the Cave Man rig, then plain boxes.
     const CAVEMAN = { worker: 1, brute: 1.16, hunter: 0.94 };
     const cav = CAVEMAN[type];
-    if (type === 'worker' && this.adventurerModels) rig = createAdventurerRig(ADVENTURER_SCALE);
+    if (type === 'worker' && this.adventurerModels) rig = createAdventurerRig(this.teamColor(owner), ADVENTURER_SCALE);
     if (!rig && cav && this.workerModels) rig = createWorkerRig(this.teamColor(owner), WORKER_SCALE * cav);
     const mat = new THREE.MeshStandardMaterial({ color: this.teamColor(owner), roughness: 0.6 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
@@ -2031,7 +2031,13 @@ export class Game {
       r.root.visible = near;
       if (u.body) u.body.visible = !near;
     }
-    if (near) animateWorkerRig(r, dt, moved > 0.002);
+    if (near) {
+      // walk only when really covering ground: steering jitter and shoves in
+      // a crowd must not play the stride (moonwalk), and the stride rate
+      // follows ground speed so feet plant instead of glide.
+      const covering = moved > u.speed * dt * 0.3;
+      animateWorkerRig(r, dt, covering, dt > 0 ? moved / dt : 0);
+    }
   }
 
   update(dt) {

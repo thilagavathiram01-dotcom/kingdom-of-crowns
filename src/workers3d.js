@@ -177,13 +177,21 @@ export function createWorkerRig(colorHex, scale = WORKER_SCALE) {
 
 // Crossfades the shipped idle wave with a procedural stride. The mixer runs
 // first so the leg bones we write below win the frame (weight = 1 - walkW).
-// Rigs with real walk/idle clips (adventurers) crossfade the clips instead.
-export function updateWorkerRig(rig, dt, walking) {
+// Rigs with real walk/idle clips (adventurers) crossfade the clips instead,
+// with the stride rate matched to ground speed so feet stop moonwalking.
+export function updateWorkerRig(rig, dt, walking, strideMps = 0) {
   rig.walkW += ((walking ? 1 : 0) - rig.walkW) * Math.min(1, dt * 7);
   if (rig.walkAction) {
     rig.walkAction.weight = rig.walkW;
     if (rig.idleAction) rig.idleAction.weight = 1 - rig.walkW;
-    if (rig.mixer) rig.mixer.update(dt);
+    // KayKit walk cycles cover ~2 m/s: hurry or slow the clip to the speed
+    // the unit is really moving so feet plant instead of glide.
+    if (rig.mixer) {
+      rig.mixer.timeScale = walking
+        ? THREE.MathUtils.clamp(strideMps / 2.0, 0.6, 3.0)
+        : 1.0;
+      rig.mixer.update(dt);
+    }
     rig.root.position.y = rig.lift;
     rig.root.rotation.z = 0;
     return;
@@ -221,30 +229,114 @@ export const ADVENTURER_SCALE = 0.85; // ~1.9m tall, matches the old rig
 
 let ADVENTURERS = null;
 
+// Tunic + pants bones whose vertices take the kingdom dye.
+const DYE_JOINTS = new Set(['hips', 'spine', 'chest', 'upperlegl', 'upperlegr', 'lowerlegl', 'lowerlegr']);
+
+// Per-vertex dye mask from skin weights (same technique as the Cave Man
+// tunic mask). Geometry is shared across clones, so the mask is baked once.
+function markDye(mesh) {
+  const geo = mesh.geometry;
+  const si = geo.attributes.skinIndex;
+  const sw = geo.attributes.skinWeight;
+  if (!si || !sw || geo.attributes.aDye) return;
+  const joints = new Set();
+  mesh.skeleton.bones.forEach((b, i) => {
+    if (DYE_JOINTS.has(String(b.name).toLowerCase())) joints.add(i);
+  });
+  if (!joints.size) return;
+  const count = geo.attributes.position.count;
+  const mask = new Float32Array(count);
+  for (let v = 0; v < count; v++) {
+    let m = 0;
+    for (let k = 0; k < 4; k++) {
+      if (!joints.has(component(si, v, k))) continue;
+      const w = component(sw, v, k);
+      if (w > m) m = w;
+    }
+    mask[v] = m;
+  }
+  geo.setAttribute('aDye', new THREE.BufferAttribute(mask, 1));
+}
+
+function adventurerDyeMaterial(hex) {
+  let m = ADVENTURERS.dyeMats.get(hex);
+  if (m) return m;
+  m = new THREE.MeshStandardMaterial({
+    map: ADVENTURERS.atlas,
+    roughness: 0.85,
+    metalness: 0.0,
+  });
+  const dye = { value: new THREE.Color(hex) };
+  m.userData.dye = dye;
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uDye = dye;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aDye;\nvarying float vDye;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvDye = aDye;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec3 uDye;\nvarying float vDye;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+\tif ( vDye > 0.01 ) {
+\t\tfloat l = dot( diffuseColor.rgb, vec3( 0.299, 0.587, 0.114 ) );
+\t\tdiffuseColor.rgb = mix( diffuseColor.rgb, uDye * ( 0.34 + l * 1.5 ), clamp( vDye, 0.0, 1.0 ) );
+\t}`);
+  };
+  m.customProgramCacheKey = () => 'adv-dye-v1';
+  ADVENTURERS.dyeMats.set(hex, m);
+  return m;
+}
+
+function adventurerCapeMaterial(hex) {
+  let m = ADVENTURERS.capeMats.get(hex);
+  if (m) return m;
+  m = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.9, metalness: 0.0 });
+  ADVENTURERS.capeMats.set(hex, m);
+  return m;
+}
+
 export async function loadAdventurerModels() {
   const base = basePath();
   const loader = new GLTFLoader();
   const variants = [];
+  let atlas = null;
   for (const file of ADVENTURER_FILES) {
     const gltf = await loader.loadAsync(base + 'models/workers/' + file + '.glb');
     const scene = gltf.scene;
-    scene.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) { o.castShadow = true; } });
+    // workers carry no weapons: drop every static prop except the cape, which
+    // is part of the outfit (rogue ships knives + crossbows in-hand).
+    const drop = [];
+    scene.traverse((o) => {
+      if ((o.isMesh && !o.isSkinnedMesh) && o.name !== 'Rogue_Cape') drop.push(o);
+    });
+    for (const o of drop) o.parent?.remove(o);
+    scene.traverse((o) => {
+      if (o.isMesh || o.isSkinnedMesh) { o.castShadow = true; }
+      if (o.isSkinnedMesh) {
+        markDye(o);
+        if (!atlas && o.material?.map) atlas = o.material.map;
+      }
+    });
     scene.updateMatrixWorld(true);
     const lift = -new THREE.Box3().setFromObject(scene).min.y;
     const clips = new Map(gltf.animations.map((c) => [c.name, c]));
     variants.push({ scene, lift, clips });
   }
-  ADVENTURERS = { variants, next: 0, walk: 0 };
+  ADVENTURERS = { variants, next: 0, walk: 0, atlas, dyeMats: new Map(), capeMats: new Map() };
   return ADVENTURERS;
 }
 
 // Same rig shape as the Cave Man (root/lift/phase/walkW/bones/mixer), plus
 // idle + walk actions. updateWorkerRig crossfades the real clips instead of
-// the procedural stride when walkAction is present.
-export function createAdventurerRig(scale = ADVENTURER_SCALE) {
+// the procedural stride when walkAction is present. Tunics + capes take the
+// kingdom dye; skin, boots and hoods keep their baked colours.
+export function createAdventurerRig(colorHex, scale = ADVENTURER_SCALE) {
   if (!ADVENTURERS) return null;
   const v = ADVENTURERS.variants[ADVENTURERS.next++ % ADVENTURERS.variants.length];
   const model = skeletonClone(v.scene);
+  model.traverse((o) => {
+    if (o.isSkinnedMesh) o.material = adventurerDyeMaterial(colorHex);
+    else if (o.isMesh && o.name === 'Rogue_Cape') o.material = adventurerCapeMaterial(colorHex);
+  });
   model.scale.setScalar(scale);
   const root = new THREE.Group();
   root.position.y = v.lift * scale;
