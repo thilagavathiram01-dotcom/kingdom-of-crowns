@@ -16,19 +16,19 @@
 
     <!-- boot gate: CoC-style splash + loader, stays until all assets loaded -->
     <div id="boot-gate" aria-live="polite">
-      <img id="splash-img" src="/splash.jpg" alt="" aria-hidden="true" />
       <div class="splash-fallback" aria-hidden="true"></div>
+      <img id="splash-img" src="splash.jpg" alt="" aria-hidden="true" />
       <div class="splash-vignette" aria-hidden="true"></div>
       <div class="boot-hud">
-        <div class="boot-logo"><span class="boot-crown">♛</span> KINGDOM <span>OF CROWNS</span></div>
+        <div class="boot-loading">Loading</div>
         <div class="boot-bar-wrap">
           <div class="boot-bar"><div id="boot-fill"></div></div>
-          <div class="boot-row"><span id="boot-label">Loading…</span><span id="boot-pct">0%</span></div>
+          <div class="boot-row"><span id="boot-label">Summoning the armies…</span><span id="boot-pct">0%</span></div>
         </div>
         <p class="boot-tip" id="boot-tip">Scout with fast units, wall the bridges, then invade.</p>
         <button id="btn-play" class="hidden" type="button">⚔ Tap to Play ♛</button>
       </div>
-      <audio id="bg-music" src="/audio/fantasy-adventure-quest.mp3" loop preload="auto"></audio>
+      <audio id="bg-music" src="audio/fantasy-adventure-quest.mp3" loop preload="auto"></audio>
     </div>
 
     <!-- Landscape gate: this RTS needs a wide screen (phones + tablets) -->

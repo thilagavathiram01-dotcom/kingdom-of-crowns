@@ -77,12 +77,25 @@ const btnPlay = document.getElementById('btn-play');
 const bgMusic = document.getElementById('bg-music');
 const splashImg = document.getElementById('splash-img');
 
-// splash art: /public/splash.jpg overrides the gradient fallback.
-// If missing (404), hide the <img> so the painted fallback shows.
+// splash art must ALWAYS show: resolve against vite base, retry once,
+// only then fall back to gradient. Game enters ONLY at 100%.
+const BASE = import.meta.env?.BASE_URL || '/';
 if (splashImg) {
-  splashImg.addEventListener('error', () => splashImg.remove());
-  // cache-bust check: if splash.jpg is the vite 404 fallback, drop it
-  fetch((import.meta.env?.BASE_URL || '/') + 'splash.jpg', { method: 'HEAD' }).catch(() => {});
+  const want = BASE + 'splash.jpg';
+  if (!String(splashImg.getAttribute('src') || '').endsWith('splash.jpg')) splashImg.src = want;
+  else if (new URL(splashImg.src, location.href).pathname !== new URL(want, location.href).pathname) splashImg.src = want;
+  splashImg.addEventListener('error', () => {
+    // one retry with absolute origin (fixes base-path mismatches on Pages preview)
+    const abs = new URL('splash.jpg', location.href).href;
+    if (splashImg.src !== abs) splashImg.src = abs;
+    else splashImg.style.display = 'none'; // last resort: gradient fallback
+  });
+}
+if (bgMusic) {
+  try {
+    const wantAudio = BASE + 'audio/fantasy-adventure-quest.mp3';
+    if (!bgMusic.getAttribute('src')?.includes('fantasy-adventure')) bgMusic.src = wantAudio;
+  } catch {}
 }
 
 function setBoot(pct, label) {
@@ -199,6 +212,13 @@ async function boot() {
   setBoot(100, 'Ready for war!');
   clearInterval(tipTimer);
   startMusic();
+  // CoC rule: enter the game ONLY at 100%. Fade the splash, then start loop.
+  const finishBoot = () => {
+    try { bgMusic?.play()?.catch?.(() => {}); } catch {}
+    bootGate?.classList.add('done');
+    setTimeout(() => bootGate?.remove(), 500);
+    loop();
+  };
   // If the browser blocked autoplay, keep the splash with Tap to Play
   // (also unlocks music) instead of dropping straight into the game.
   const needTap = !!bgMusic && bgMusic.paused;
@@ -207,15 +227,13 @@ async function boot() {
     setBoot(100, 'Ready — tap to play!');
     btnPlay.addEventListener('click', () => {
       startMusic();
-      try { bgMusic?.play()?.catch?.(() => {}); } catch {}
-      bootGate?.remove();
-      loop();
+      finishBoot();
     }, { once: true });
-    // also allow tapping anywhere on the splash
+    // also allow tapping anywhere on the splash (only now that we're at 100%)
     bootGate?.addEventListener('pointerdown', () => btnPlay.click(), { once: true });
   } else {
-    bootGate?.remove();
-    loop();
+    // small beat at 100% so players actually see the full bar like CoC
+    setTimeout(finishBoot, 450);
   }
 }
 boot();
