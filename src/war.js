@@ -148,7 +148,7 @@ export function installWar(game, ai) {
     br.activeWars = 0;
     const rawLaunch = br.launch?.bind(br);
     if (rawLaunch) {
-      br.launch = (kind, foe, units, myHq) => {
+      br.launch = (kind, foe, units, myHq, objectiveOverride = null) => {
         if ((br.activeWars || 0) >= th.maxWars) return;
         // early guard: no day-one rushes (readiness gate, not a timer)
         if (buildingCount(game, br) < WAR.minBuildings && kind !== 'revenge') return;
@@ -163,7 +163,7 @@ export function installWar(game, ai) {
           game.diplomacy?.declareWar(br.owner, foe);
         }
         br.activeWars = (br.activeWars || 0) + 1;
-        rawLaunch(kind, foe, units, myHq);
+        rawLaunch(kind, foe, units, myHq, objectiveOverride);
       };
     }
     const rawEnd = br.endWave?.bind(br);

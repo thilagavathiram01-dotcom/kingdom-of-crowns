@@ -714,5 +714,50 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
     && dip.get('k0', 'k1').type === 'war' && soldier.target === foe);
 }
 
+// ---------- 22. territory intrusion alerts + demolition raids ----------
+{
+  const g = fakeGame();
+  g.spawnPing = () => {};
+  g.time = 100;
+  g.players.k0 = { id: 'k0', idx: 0, logs: 500, wood: 500, food: 500, alive: true, color: 1, name: 'You' };
+  g.players.k1 = { id: 'k1', idx: 1, logs: 500, wood: 500, food: 500, alive: true, color: 2, name: 'Ash' };
+  const msgs = [];
+  g.hooks.onMessage = (t) => msgs.push(t);
+  g.hqRadiusOf = () => 70;
+  const { AIManager } = await import('./src/ai.js');
+  const mgr = new AIManager(g);
+  const brain = mgr.byOwner.get('k1');
+  g.spawnBuilding('hq', 'k0', 0, 0);
+  g.spawnBuilding('hq', 'k1', 200, 0);
+  // own land: silent
+  msgs.length = 0;
+  g.spawnBuilding('house', 'k0', 20, 0);
+  ok('own-land building raises no alert', msgs.length === 0 && !brain.grudges.get('k0'));
+  // intruder barracks deep in Ash land: grudge + recorded + human warned
+  const before = msgs.length;
+  const intr = g.spawnBuilding('barracks', 'k0', 200, 10);
+  ok('intrusion grudges the victim', (brain.grudges.get('k0')?.anger || 0) > 0);
+  ok('intruder building is put on the demolish list', brain.intrusions.has(intr.id));
+  ok('human intruder is warned', msgs.slice(before).some((t) => /expect retaliation/.test(t)));
+  // AI builds in YOUR land: you get the destroy-it alert
+  const aiIntr = g.spawnBuilding('barracks', 'k1', 10, 5);
+  void aiIntr;
+  ok('human victim is alerted', msgs.some((t) => /YOUR territory/.test(t)));
+  // alert throttle: immediate repeat stays quiet
+  const n0 = msgs.length;
+  g.spawnBuilding('house', 'k0', 205, 5);
+  ok('repeat alerts throttle per pair', msgs.length === n0);
+  // walls merely annoy, never trigger raids
+  const bw = g.spawnBuilding('wall', 'k0', 195, -5, 0, 4.6);
+  ok('intruder walls never make the demolish list', !brain.intrusions.has(bw.id));
+  // demolish raid: brain sends fighters at the nearest recorded building
+  for (let i = 0; i < 8; i++) g.spawnUnit('soldier', 'k1', 190 + i, -10);
+  const S = { army: g.units.filter((u) => u.owner === 'k1' && !u.dead), rax: [] };
+  brain.raidIntrusion(S, g.hqOf('k1'));
+  ok('demolish raid launches at an intruder structure',
+    !!brain.wave && brain.wave.kind === 'demolish' && brain.intrusions.has(brain.wave.objective?.id),
+    `wave=${brain.wave?.kind} obj=${brain.wave?.objective?.id}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

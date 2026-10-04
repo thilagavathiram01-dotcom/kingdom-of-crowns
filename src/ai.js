@@ -67,6 +67,7 @@ export class KingdomBrain {
 
     // own memory (never shared)
     this.grudges = new Map();   // attackerId -> { anger, last, hits }
+    this.intrusions = new Map(); // buildingId -> { foe, x, z, t } (demolish list)
     this.bias = new Map();      // foeId -> my private misjudgement of their strength
     this.foeCD = new Map();     // foeId -> earliest time I may campaign against them again
     this.hitT = -1e9;           // last time anything of mine was hit
@@ -103,6 +104,28 @@ export class KingdomBrain {
     gr.last = g.time;
     gr.hits++;
     this.hitT = g.time;
+  }
+
+  // someone built inside MY territory: grudge + remember the structure for
+  // a demolition raid. Walls alone only annoy (small anger, still watched).
+  noteIntrusion(attacker, building) {
+    const g = this.game;
+    if (!this.isAlive(attacker) || attacker === this.owner) return;
+    const w = building.type === 'wall' ? 0.4 : 1.5;
+    let gr = this.grudges.get(attacker);
+    if (!gr) { gr = { anger: 0, last: 0, hits: 0 }; this.grudges.set(attacker, gr); }
+    gr.anger = Math.min(12, gr.anger + w);
+    gr.last = g.time;
+    gr.hits++;
+    this.hitT = g.time;
+    if (building.type !== 'wall') {
+      this.intrusions.set(building.id, { foe: attacker, x: building.x, z: building.z, t: g.time, bid: building.id });
+    }
+    // prune stale / destroyed entries so the map never grows
+    for (const [id, rec] of this.intrusions) {
+      const b = g.buildings.find((x) => x.id === id);
+      if (!b || b.dead || g.time - rec.t > 300) this.intrusions.delete(id);
+    }
   }
 
   isAlive(id) { return !!this.game.players[id]?.alive; }
@@ -421,6 +444,8 @@ export class KingdomBrain {
     // ---- 4. WAR ----
     if (this.wave) this.runWave(S);
     else if (!threat) this.considerWar(S, hq);
+    // ---- 4b. DEMOLISH: intruders building in our land get raided ----
+    if (!this.wave && !threat) this.raidIntrusion(S, hq);
 
     if (!threat) {
       if (this.wave) this.status = `${this.wave.kind === 'revenge' ? 'Revenge on' : 'Invading'} ${g.players[this.wave.foe]?.name || ''}`;
@@ -500,6 +525,36 @@ export class KingdomBrain {
       }
       if (!acted) break;
     }
+  }
+
+  // ---- demolition raid: destroy intruder structures in our territory ----
+  // Small fast force (not a full invasion): marches straight at the recorded
+  // building and knocks it down. One raid at a time; the wave slot is shared.
+  raidIntrusion(S, hq) {
+    if (!this.intrusions.size) return;
+    // drop dead/stale records first
+    for (const [id, rec] of this.intrusions) {
+      const b = this.game.buildings.find((x) => x.id === id);
+      if (!b || b.dead) { this.intrusions.delete(id); continue; }
+      if (!this.isAlive(rec.foe)) { this.intrusions.delete(id); continue; }
+    }
+    if (!this.intrusions.size) return;
+    const avail = this.available(S);
+    const guardN = Math.max(2, Math.ceil(0.2 * S.army.length));
+    const sendable = avail.slice(0, Math.max(0, avail.length - guardN));
+    if (sendable.length < 3) return; // too thin — hold the fort instead
+    // nearest intruder building first
+    let rec = null, bd = 1e9;
+    for (const r of this.intrusions.values()) {
+      const d = Math.hypot(r.x - hq.x, r.z - hq.z);
+      if (d < bd) { bd = d; rec = r; }
+    }
+    if (!rec) return;
+    const target = this.game.buildings.find((x) => x.id === rec.bid);
+    if (!target || target.dead) { this.intrusions.delete(rec.bid); return; }
+    const raiders = sendable.slice(0, Math.min(6, sendable.length));
+    this.status = `Demolishing intruder (${raiders.length})…`;
+    this.launch('demolish', rec.foe, raiders, hq, target);
   }
 
   // ---------------------------------------------------------------- war
@@ -624,11 +679,11 @@ export class KingdomBrain {
     return pick(bl);
   }
 
-  launch(kind, foe, units, myHq) {
+  launch(kind, foe, units, myHq, objectiveOverride = null) {
     const g = this.game;
     const fh = g.hqOf(foe);
     if (!fh || !units.length) return;
-    const objective = this.pickBase(foe, kind);
+    const objective = objectiveOverride && !objectiveOverride.dead ? objectiveOverride : this.pickBase(foe, kind);
     if (!objective) return;
     const dx = myHq.x - fh.x, dz = myHq.z - fh.z, d = Math.hypot(dx, dz) || 1;
     const stage = g.findFreeSpot(fh.x + (dx / d) * 36, fh.z + (dz / d) * 36, 1.0);
@@ -681,6 +736,9 @@ export class KingdomBrain {
 
     // ---- assault ----
     if (!w.objective || w.objective.dead) {
+      // demolish raids end when the intruder structure falls — raiders go
+      // home instead of escalating into a full invasion on their own
+      if (w.kind === 'demolish') return this.endWave('cleared');
       w.objective = this.pickBase(w.foe, w.kind);
       if (!w.objective) return this.endWave('cleared');
     }
@@ -742,6 +800,22 @@ export class AIManager {
     this.warMsgT = 0;
     game.aiWarNote = (a, b, kind) => this.warNote(a, b, kind);
     game.onHit = (ent, attacker, amt) => this.byOwner.get(ent.owner)?.noteHit(attacker, ent, amt);
+    // territory intrusion: only the VICTIM's brain hears (privacy kept).
+    // Human side gets a throttled alert so the feed never floods.
+    this._intrAlert = new Map();
+    game.onIntrusion = (intruder, victim, building) => {
+      this.byOwner.get(victim)?.noteIntrusion(intruder, building);
+      const g = this.game;
+      const key = `${intruder}>${victim}`;
+      const last = this._intrAlert.get(key) ?? -1e9;
+      if (g.time - last < 60) return; // one alert per pair per minute max
+      this._intrAlert.set(key, g.time);
+      if (g.isHuman(victim)) {
+        g.hookMsg(`⚠️ ${g.players[intruder]?.name} is building ${building.type} in YOUR territory — destroy it!`);
+      } else if (g.isHuman(intruder)) {
+        g.hookMsg(`⚠️ You are building in ${g.players[victim]?.name}'s territory — expect retaliation!`);
+      }
+    };
   }
 
   warNote(a, b, kind) {

@@ -604,6 +604,7 @@ export class Game {
       this.resetRally(b);
       this.buildings.push(b);
       this.colliderVersion++;
+      this.noteConstruction(b);
       return b;
     }
     if (type === 'turret') {
@@ -655,6 +656,7 @@ export class Game {
     this.resetRally(b);
     this.buildings.push(b);
     this.colliderVersion++;
+    this.noteConstruction(b);
     return b;
   }
     const km = this.buildingModelFor(type, owner, type === 'hq' ? 5.2 : 3.6);
@@ -704,6 +706,7 @@ export class Game {
     this.resetRally(b);
     this.buildings.push(b);
     this.colliderVersion++;
+    this.noteConstruction(b);
     return b;
   }
 
@@ -2040,6 +2043,26 @@ export class Game {
     let n = 0;
     for (const b of this.buildings) if (!b.dead && b.owner === owner && b.type === 'hq') n++;
     return n;
+  }
+
+  // territory intrusion: a new building inside ANOTHER living kingdom's HQ
+  // radius alerts that kingdom — it grudges + raids the intruder.
+  // Event-driven (once per build, ~90 distance checks) so 29 brains cost
+  // nothing per frame; each victim brain alone hears about its own land.
+  noteConstruction(b) {
+    if (!b || b.dead || !b.owner) return;
+    try {
+      const R = (h) => (this.hqRadiusOf ? this.hqRadiusOf(h) : 70);
+      for (const id of this.aliveKingdoms()) {
+        if (id === b.owner) continue;
+        let inside = false;
+        for (const h of this.buildings) {
+          if (h.dead || h.owner !== id || h.type !== 'hq') continue;
+          if (Math.hypot(b.x - h.x, b.z - h.z) <= R(h)) { inside = true; break; }
+        }
+        if (inside) this.onIntrusion?.(b.owner, id, b);
+      }
+    } catch { /* headless */ }
   }
 
   upgradeHQ(hq) {
