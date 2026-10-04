@@ -3,6 +3,7 @@ import { CONFIG, COLORS, kingdomColor, kingdomName } from './config.js';
 import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite } from './terrain.js';
 import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE, createAdventurerRig, ADVENTURER_SCALE } from './workers3d.js';
 import { buildingModel } from './buildings3d.js';
+import { kitBuilding, kitUnit } from './kit.js';
 
 let UID = 1;
 // scratch matrices for harvest scaling (no per-chop allocation)
@@ -489,12 +490,23 @@ export class Game {
       const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.17, 2.2, 8), dark);
       barrel.rotation.x = Math.PI / 2 - 0.25; barrel.position.set(0, 1.5, 1.4); g.add(barrel);
     } else {
-      body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.7, 2.1), mat);
-      body.position.y = 0.55;
-      const tur = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.4, 10), dark);
-      tur.position.y = 1.05; g.add(tur);
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.6, 6), dark);
-      barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 1.05, 1.2); g.add(barrel);
+      // hand-crafted kit: swordsman/spearman/archer/knight/healer/catapult/
+      // ram/spy/heroes each get a distinct team-tinted silhouette
+      const kit = kitUnit(type, this.teamColor(owner));
+      if (kit) {
+        g.add(kit.group);
+        body = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01),
+          new THREE.MeshBasicMaterial({ visible: false }));
+        body.position.y = 0;
+        g.userData.kitHeight = kit.height;
+      } else {
+        body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.7, 2.1), mat);
+        body.position.y = 0.55;
+        const tur = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.4, 10), dark);
+        tur.position.y = 1.05; g.add(tur);
+        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.6, 6), dark);
+        barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 1.05, 1.2); g.add(barrel);
+      }
     }
     body.castShadow = true;
     g.add(body);
@@ -514,7 +526,8 @@ export class Game {
     }
     g.position.set(x, this.gy(x, z), z);
     const bar = this.makeHealthBar(type === 'tank' || type === 'brute' ? 2 : 1.5);
-    bar.position.y = type === 'tank' || type === 'brute' ? 2.2 : 2.0;
+    bar.position.y = g.userData.kitHeight ? g.userData.kitHeight + 0.4
+      : type === 'tank' || type === 'brute' ? 2.2 : 2.0;
     g.add(bar);
     const ring = this.addSelectionRing(g, st.radius + 0.35, COLORS.select);
     this.scene.add(g);
@@ -642,25 +655,14 @@ export class Game {
       g.add(km.model);
       barY = km.height + 0.8;
     } else {
-      const base = new THREE.Mesh(new THREE.BoxGeometry(s, type === 'hq' ? 3.2 : 2.4, s),
-        new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 }));
-      base.position.y = type === 'hq' ? 1.6 : 1.2;
-      base.castShadow = base.receiveShadow = true;
-      const trim = new THREE.Mesh(new THREE.BoxGeometry(s + 0.4, 0.4, s + 0.4),
-        new THREE.MeshStandardMaterial({ color: this.teamColor(owner), emissive: this.teamColor(owner), emissiveIntensity: 0.35 }));
-      trim.position.y = type === 'hq' ? 3.3 : 2.5;
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(s * 0.42, 1.6, 4),
-        new THREE.MeshStandardMaterial({ color: 0x475569 }));
-      roof.position.y = type === 'hq' ? 4.2 : 3.3;
-      roof.rotation.y = Math.PI / 4;
-      g.add(base, trim, roof);
-      // windows glow strip for HQ
-      if (type === 'hq') {
-        const win = new THREE.Mesh(new THREE.BoxGeometry(s + 0.1, 0.35, s + 0.1),
-          new THREE.MeshBasicMaterial({ color: 0xfde68a }));
-        win.position.y = 2.2; g.add(win);
-      }
-      barY = type === 'hq' ? 5.6 : 4.6;
+      // hand-crafted kit model: every building has a distinct silhouette
+      // with the kingdom colour on roof/banners/trim (stone stays natural).
+      // The mill's blade group is named 'blades' so the economy tick spins it.
+      const kit = kitBuilding(type, this.teamColor(owner), s);
+      g.add(kit.group);
+      g.userData.kitBlades = kit.blades || null;
+      g.userData.crownCrystal = kit.crownCrystal || null;
+      barY = kit.height + 0.8;
     }
     // rally flag
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 6), new THREE.MeshStandardMaterial({ color: 0x94a3b8 }));
@@ -677,7 +679,11 @@ export class Game {
       id: UID++, kind: 'building', type, owner, mesh: g, ring, bar, flag,
       x, z, hp: st.hp, maxHp: st.hp, size: s, radius: s * 0.72,
       queue: [], progress: 0, buildTime: 0, dead: false,
+      blades: g.userData.kitBlades || null,
+      crownCrystal: g.userData.crownCrystal || null,
     };
+    if (type === 'mill' && !b.workers) b.workers = [];
+    if (type === 'farm' && b.grain === undefined) b.grain = 0;
     this.resetRally(b);
     this.buildings.push(b);
     this.colliderVersion++;
@@ -1693,6 +1699,7 @@ export class Game {
       worker: CONFIG.workerCost, soldier: CONFIG.soldierCost, brute: CONFIG.bruteCost,
       hunter: CONFIG.hunterCost, tank: CONFIG.tankCost, scout: CONFIG.scoutCost, artillery: CONFIG.artilleryCost,
       swordsman: 60, spearman: 50, archer: 55, knight: 110, healer: 60, catapult: 150, ram: 100, spy: 100,
+      hero_king: 400, hero_champion: 400, hero_archmage: 450,
     };
     return table[type] ?? 100;
   }
@@ -1702,6 +1709,7 @@ export class Game {
       worker: { food: 50 }, swordsman: { food: 60, crystal: 20 }, spearman: { food: 50, wood: 20 },
       archer: { wood: 50, gold: 30 }, knight: { food: 90, crystal: 40 }, scout: { food: 40 },
       healer: { gold: 60 }, catapult: { wood: 120, stone: 60 }, ram: { wood: 100 }, spy: { gold: 100 },
+      hero_king: { food: 200, gold: 200 }, hero_champion: { food: 200, gold: 200 }, hero_archmage: { crystal: 200, gold: 250 },
       soldier: { food: 60, crystal: 20 }, tank: { food: 90, crystal: 40 }, brute: { food: 70, wood: 20 },
       hunter: { food: 50, wood: 20 }, artillery: { wood: 120, stone: 60 },
     };
@@ -1709,7 +1717,14 @@ export class Game {
     return { wood: this.unitCost(type) };
   }
   canTrain(building, type) {
-    if (building.type === 'hq') return ['worker', 'scout'].includes(type);
+    if (building.type === 'hq') {
+      if (type === 'worker' || type === 'scout') return true;
+      // heroes: one per kingdom, trained at HQ from Age II
+      if (['hero_king', 'hero_champion', 'hero_archmage'].includes(type)) {
+        return (this.players[building.owner]?.age || 0) >= 1;
+      }
+      return false;
+    }
     if (building.type === 'barracks') return ['soldier', 'swordsman', 'spearman', 'brute', 'hunter', 'tank', 'scout', 'artillery', 'knight', 'catapult', 'ram'].includes(type);
     if (building.type === 'archery') return ['archer', 'hunter', 'scout'].includes(type);
     if (building.type === 'stable') return ['knight', 'scout', 'tank'].includes(type);

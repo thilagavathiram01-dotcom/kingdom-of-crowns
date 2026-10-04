@@ -30,7 +30,7 @@ export const CONFIG = {
   supplyPerTurret: 0,
   supplyPerHouse: 5,
 
-  trainTime: { worker: 7, soldier: 9, tank: 14, scout: 7, artillery: 15, brute: 12, hunter: 8 },
+  trainTime: { worker: 7, soldier: 9, tank: 14, scout: 7, artillery: 15, brute: 12, hunter: 8, hero_king: 25, hero_champion: 25, hero_archmage: 30 },
 
   units: {
     worker:   { hp: 75,  speed: 7.5, damage: 5,  range: 1.8, cooldown: 0.9, aggro: 6, sight: 13, harvestRate: 8, harvestTime: 2.2, radius: 0.7 },
@@ -49,6 +49,9 @@ export const CONFIG = {
     catapult: { hp: 120, speed: 2.5, damage: 45, range: 18.0, cooldown: 3.0, aggro: 13, sight: 16, splash: 4.0, radius: 0.9 },
     ram:      { hp: 200, speed: 3.0, damage: 30, range: 2.0, cooldown: 1.8, aggro: 8, sight: 12, radius: 0.9 },
     spy:      { hp: 30,  speed: 5.5, damage: 4,  range: 1.5, cooldown: 1.0, aggro: 0, sight: 24, radius: 0.55 },
+    hero_king:{ hp: 400, speed: 5.0, damage: 30, range: 2.2, cooldown: 1.0, aggro: 18, sight: 20, radius: 0.85 },
+    hero_champion: { hp: 500, speed: 4.6, damage: 26, range: 2.0, cooldown: 1.1, aggro: 18, sight: 18, radius: 0.9 },
+    hero_archmage: { hp: 220, speed: 4.4, damage: 40, range: 14.0, cooldown: 2.2, aggro: 16, sight: 20, splash: 3.0, radius: 0.75 },
   },
 
   walls: {
@@ -192,6 +195,9 @@ export const UNIT_DEFS = {
   catapult:  { name: 'Catapult', cost: { wood: 120, stone: 60 }, hp: 120, speed: 2.5 },
   ram:       { name: 'Ram', cost: { wood: 100 }, hp: 200, speed: 3.0 },
   spy:       { name: 'Spy', cost: { gold: 100 }, hp: 30, speed: 5.5 },
+  hero_king: { name: 'The King/Queen', cost: { food: 200, gold: 200 }, hp: 400, speed: 5.0 },
+  hero_champion: { name: 'The Champion', cost: { food: 200, gold: 200 }, hp: 500, speed: 4.6 },
+  hero_archmage: { name: 'The Archmage', cost: { crystal: 200, gold: 250 }, hp: 220, speed: 4.4 },
 };
 
 // Counter triangle: spear > knight > archer > swordsman/spearman (x1.5)

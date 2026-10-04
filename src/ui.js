@@ -14,6 +14,9 @@ const UNIT_META = {
   ram: { name: 'Ram', icon: 'ram', cost: () => 100, desc: 'Gate breaker, 200 HP' },
   spy: { name: 'Spy', icon: 'scout', cost: () => 100, desc: 'Reveals enemy, sabotage' },
   tank: { name: 'Tank', icon: 'tank', cost: () => CONFIG.tankCost, desc: 'Heavy armor' },
+  hero_king: { name: 'The King/Queen', icon: 'crown', cost: () => 400, desc: 'Rally Cry: +20% speed & damage (Age II)' },
+  hero_champion: { name: 'The Champion', icon: 'shield', cost: () => 400, desc: 'Shield Wall: -30% damage (Age II)' },
+  hero_archmage: { name: 'The Archmage', icon: 'archer', cost: () => 450, desc: 'Crystal Storm area damage (Age IV)' },
   artillery: { name: 'Artillery', icon: 'artillery', cost: () => CONFIG.artilleryCost, desc: 'Long-range splash' },
   brute: { name: 'Brute', icon: 'brute', cost: () => CONFIG.bruteCost, desc: 'Caveman club brawler' },
   hunter: { name: 'Hunter', icon: 'hunter', cost: () => CONFIG.hunterCost, desc: 'Caveman spear thrower' },
@@ -405,8 +408,11 @@ export class HUD {
         this.elBuild.appendChild(rallyHint);
         ap(this.trainBtn(single, 'worker'));
         ap(this.trainBtn(single, 'scout'));
-        const ages = ['I. Village', 'II. Castle (300🍖 200🪵 100🪨)', 'III. Kingdom', 'IV. Empire'];
         const age = g.players[g.humanId].age || 0;
+        if (age >= 1) {
+          for (const t of ['hero_king', 'hero_champion', 'hero_archmage']) ap(this.trainBtn(single, t));
+        }
+        const ages = ['I. Village', 'II. Castle (300🍖 200🪵 100🪨)', 'III. Kingdom', 'IV. Empire'];
         ap(this.actBtn('home', `Age Up → ${ages[Math.min(3, age + 1)]}`, 'unlocks new units & buildings', () => { g.ageUp?.(g.humanId); this.onSelect(g.selected); }));
         for (const t of ['house', 'farm', 'mill', 'lumber', 'quarry', 'depot']) {
           const m = BLD_META[t];
