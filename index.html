@@ -137,6 +137,19 @@
       <button onclick="location.reload()">Reload</button>
     </div>
 
+    <div id="challenge-modal" class="hidden" aria-live="assertive">
+      <div class="ch-card">
+        <div class="ch-swords">⚔️</div>
+        <h2 id="ch-title">War declared!</h2>
+        <p id="ch-sub"></p>
+        <p id="ch-timer">90s to answer</p>
+        <div class="ch-btns">
+          <button id="btn-ch-accept" type="button">⚔️ Accept — total war!</button>
+          <button id="btn-ch-reject" type="button">🛡️ Reject — they invade anyway</button>
+        </div>
+      </div>
+    </div>
+
     <div id="game-over" class="hidden">
       <div class="go-card">
         <div class="go-crown">👑</div>

@@ -617,5 +617,75 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   ok('ceasefire partners are not enemies', found !== foe, `found=${found?.type}/${found?.owner}`);
 }
 
+// ---------- 20. formal war declarations with mutual approval ----------
+{
+  const g = fakeGame();
+  g.spawnPing = () => {};
+  g.time = 0;
+  g.players.k0 = { id: 'k0', idx: 0, logs: 1000, wood: 1000, food: 1000, alive: true, color: 0x2f6fed, name: 'You' };
+  g.players.k1 = { id: 'k1', idx: 1, logs: 1000, wood: 1000, food: 1000, alive: true, color: 0xef4444, name: 'Ash Kingdom' };
+  const { Diplomacy } = await import('./src/diplomacy.js');
+  const dip = new Diplomacy(g);
+  g.diplomacy = dip;
+  g.hqRadiusOf = () => 70;
+  const hq0 = g.spawnBuilding('hq', 'k0', 0, 0);
+  const hq1 = g.spawnBuilding('hq', 'k1', 120, 0);
+  void hq0; void hq1;
+  for (let i = 0; i < 6; i++) g.spawnUnit('soldier', 'k0', 5 + i, 5);
+  for (let i = 0; i < 6; i++) g.spawnUnit('soldier', 'k1', 115 + i, 5);
+  // challenge is free, freezes fighting, both sides muster and hold
+  ok('challenge is free to issue', dip.challenge('k0', 'k1') === true);
+  ok('challenge freezes targeting', dip.atPeace('k0', 'k1') === true);
+  const m0 = g.musterFormation('k0', 'k1');
+  const m1 = g.musterFormation('k1', 'k0');
+  ok('both sides muster in formation', m0 === 6 && m1 === 6);
+  const held = g.units.filter((u) => u.owner === 'k0' && u.type !== 'worker');
+  ok('mustered troops hold the line', held.every((u) => u.musterHold && u.hasOrder));
+  // accept → arranged total war until one kingdom falls
+  ok('accept starts total war', dip.answerChallenge('k1', true) === true && dip.isTotalWar('k0', 'k1'));
+  // fresh pair, reject → plain war (challenger invades anyway)
+  const g2 = fakeGame();
+  g2.spawnPing = () => {};
+  g2.time = 0;
+  g2.players.k0 = { id: 'k0', idx: 0, logs: 500, wood: 500, food: 500, alive: true, color: 1, name: 'A' };
+  g2.players.k1 = { id: 'k1', idx: 1, logs: 500, wood: 500, food: 500, alive: true, color: 2, name: 'B' };
+  const dip2 = new Diplomacy(g2);
+  g2.diplomacy = dip2;
+  dip2.challenge('k0', 'k1');
+  ok('reject means invasion anyway', dip2.answerChallenge('k1', false) === true
+    && dip2.get('k0', 'k1').type === 'war' && !dip2.isTotalWar('k0', 'k1'));
+  // silence expires into rejection
+  const g3 = fakeGame();
+  g3.spawnPing = () => {};
+  g3.time = 0;
+  g3.players.k0 = { id: 'k0', idx: 0, logs: 500, wood: 500, food: 500, alive: true, color: 1, name: 'A' };
+  g3.players.k1 = { id: 'k1', idx: 1, logs: 500, wood: 500, food: 500, alive: true, color: 2, name: 'B' };
+  const dip3 = new Diplomacy(g3);
+  g3.diplomacy = dip3;
+  dip3.challenge('k0', 'k1');
+  g3.time = 1000;
+  dip3.update();
+  ok('expired challenge auto-rejects into war', dip3.get('k0', 'k1').type === 'war' && !dip3.isTotalWar('k0', 'k1'));
+  // AI answers from strength: strong kingdom accepts a weak challenger
+  const g4 = fakeGame();
+  g4.spawnPing = () => {};
+  g4.time = 0;
+  g4.players.k0 = { id: 'k0', idx: 0, logs: 500, wood: 500, food: 500, alive: true, color: 1, name: 'Weak' };
+  g4.players.k1 = { id: 'k1', idx: 1, logs: 500, wood: 500, food: 500, alive: true, color: 2, name: 'Strong' };
+  const dip4 = new Diplomacy(g4);
+  g4.diplomacy = dip4;
+  g4.hqRadiusOf = () => 70;
+  g4.spawnBuilding('hq', 'k0', 0, 0);
+  g4.spawnBuilding('hq', 'k1', 120, 0);
+  g4.spawnUnit('soldier', 'k0', 5, 5);
+  for (let i = 0; i < 10; i++) g4.spawnUnit('soldier', 'k1', 115 + i, 5);
+  dip4.challenge('k0', 'k1');
+  const brain = new KingdomBrain(g4, 'k1');
+  brain._chAnswerAt = 10; // deliberation over, window (90s) still open
+  g4.time = 15;
+  brain.answerChallenge({ army: g4.units.filter((u) => u.owner === 'k1' && !u.dead) }, {});
+  ok('strong AI accepts the challenge', dip4.isTotalWar('k0', 'k1'));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

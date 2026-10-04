@@ -1256,6 +1256,42 @@ export class Game {
     }
   }
 
+  // ---- formal war: ranked muster formation facing the foe ----
+  // Every fighter takes a line slot on home ground and holds until the
+  // challenge is answered — no useless losses while mustering.
+  musterFormation(owner, foe) {
+    const hq = this.hqOf(owner), fh = this.hqOf(foe);
+    if (!hq || !fh) return 0;
+    const dx = fh.x - hq.x, dz = fh.z - hq.z, d = Math.hypot(dx, dz) || 1;
+    const ux = dx / d, uz = dz / d, px = -uz, pz = ux;
+    const R = this.hqRadiusOf ? this.hqRadiusOf(hq) : 70;
+    const cx = hq.x + ux * R * 0.55, cz = hq.z + uz * R * 0.55;
+    const army = this.units.filter((u) => !u.dead && u.owner === owner && u.type !== 'worker');
+    army.forEach((u, i) => {
+      const col = i % 8, row = Math.floor(i / 8);
+      const along = (col - 3.5) * 2.6 - row * 2.8;
+      const spot = this.findFreeSpot(cx + px * along, cz + pz * along, u.radius + 0.2, u) || { x: cx, z: cz };
+      u.tx = spot.x; u.tz = spot.z;
+      u.target = null; u.objective = null; u.harvestTarget = null; u.returning = false;
+      u.hasOrder = true; u.attackMove = false; u.holdPosition = false;
+      u.musterHold = true; u.path = null; u.repathT = 0; u.fireAnchor = null; u.wpQueue = null;
+      u.mesh.rotation.y = Math.atan2(ux, uz);
+    });
+    this.spawnPing(cx, cz, 0xef4444);
+    return army.length;
+  }
+
+  // release a mustered side into total war: march on the foe together
+  releaseToWar(owner, foe) {
+    const fh = this.hqOf(foe);
+    const army = this.units.filter((u) => !u.dead && u.owner === owner && u.type !== 'worker');
+    for (const u of army) {
+      u.musterHold = false; u.holdPosition = false;
+    }
+    if (fh) this.orderAttackMove(army, fh.x, fh.z);
+    return army.length;
+  }
+
   orderMove(units, x, z, queue = false) {
     // Shift+right-click queues waypoints; group moves at slowest speed (formation)
     if (queue) {
@@ -2872,6 +2908,12 @@ export class Game {
       // formation released on final approach: full speed for the last metres
       if (u.moveCap && u.tx !== undefined && Math.hypot(u.tx - u.x, u.tz - u.z) < 8) u.moveCap = null;
       if (this.navigate(u, u.tx, u.tz, dt, 0.6, 2.5) === 'arrived') {
+        // mustered troops plant feet and hold the line until war is declared
+        if (u.musterHold) {
+          u.musterHold = false; u.hasOrder = false; u.attackMove = false;
+          u.holdPosition = true; u.path = null;
+          return;
+        }
         // Shift-queue: pop the next waypoint instead of idling
         if (u.wpQueue && u.wpQueue.length) {
           const w = u.wpQueue.shift();

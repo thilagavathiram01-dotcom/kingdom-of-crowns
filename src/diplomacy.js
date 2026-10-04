@@ -2,7 +2,7 @@
 // Relations are per-pair, private to the two brains involved.
 // All logistics run on WOOD + FOOD (no counts, no gold).
 
-import { DIPLO } from './config.js';
+import { DIPLO, WAR_CHALLENGE } from './config.js';
 
 export class Diplomacy {
   constructor(game) {
@@ -35,7 +35,25 @@ export class Diplomacy {
   }
 
   atPeace(a, b) {
-    return this.isAllied(a, b) || this.underCeasefire(a, b);
+    const t = this.get(a, b).type;
+    return t === 'alliance' || t === 'ceasefire' || t === 'challenged';
+  }
+
+  isTotalWar(a, b) {
+    const r = this.get(a, b);
+    return r.type === 'war' && !!r.totalWar;
+  }
+
+  // the foe this kingdom is locked in total war with (or null)
+  totalWarWith(owner) {
+    for (const [k, r] of this.relations) {
+      if (r?.type === 'war' && r.totalWar) {
+        const [a, b] = k.split('|');
+        if (a === owner) return b;
+        if (b === owner) return a;
+      }
+    }
+    return null;
   }
 
   bankOf(id) {
@@ -68,7 +86,8 @@ export class Diplomacy {
   }
 
   declareWar(a, b) {
-    this.relations.set(this.key(a, b), { type: 'war', until: 0 });
+    const keepTotal = this.get(a, b).totalWar; // re-mustering must not end total war
+    this.relations.set(this.key(a, b), { type: 'war', until: 0, totalWar: !!keepTotal });
     this.game.hookMsg?.(`⚔️ ${this.name(a)} declared war on ${this.name(b)}`);
     if (this.game.isHuman?.(b)) this.game.warHorn?.();
     return true;
@@ -165,5 +184,92 @@ export class Diplomacy {
     this.relations.set(this.key(from, to), { type: 'ceasefire', until: this.game.time + DIPLO.ceasefire.minutes * 60 });
     this.game.hookMsg?.(`🕊️ ${this.name(to)} accepts tribute — ceasefire ${DIPLO.ceasefire.minutes} min`);
     return true;
+  }
+
+  // ---- formal war declarations (mutual approval) ----
+  // Free to issue, at any time. Freezes fighting between the pair while both
+  // sides muster in war formation. Answer with answerChallenge().
+  challenge(challenger, target) {
+    if (challenger === target) return false;
+    const cur = this.get(challenger, target);
+    // no ceremony twice, no challenging through an active pact — break it
+    // (Betray) or wait it out first
+    if (cur.type === 'challenged' && !cur.decided) return false;
+    if (cur.type === 'alliance') {
+      if (this.game.isHuman?.(challenger)) {
+        this.game.hookMsg?.(`⚔️ Break the alliance first (Betray) — honor demands it`);
+      }
+      return false;
+    }
+    if (cur.type === 'ceasefire' && this.game.time < cur.until) {
+      if (this.game.isHuman?.(challenger)) {
+        this.game.hookMsg?.(`⚔️ Honor the ceasefire first — or Betray it`);
+      }
+      return false;
+    }
+    this.relations.set(this.key(challenger, target), {
+      type: 'challenged', challenger, target,
+      until: this.game.time + WAR_CHALLENGE.answerSec,
+      decided: false,
+    });
+    this.game.hookMsg?.(`⚔️ ${this.name(challenger)} DECLARES WAR on ${this.name(target)}! Both kingdoms muster — answer within ${WAR_CHALLENGE.answerSec}s!`);
+    if (this.game.isHuman?.(challenger) || this.game.isHuman?.(target)) this.game.warHorn?.();
+    try { this.game.onChallenge?.(challenger, target); } catch { /* ignore */ }
+    return true;
+  }
+
+  pendingChallenge(a, b) {
+    const r = this.get(a, b);
+    if (r.type !== 'challenged' || r.decided) return null;
+    if (this.game.time >= r.until) return { ...r, expired: true };
+    return r;
+  }
+
+  // target answers: accept = arranged total war; reject/expired = the
+  // challenger invades anyway (surprise attack on a warned defender).
+  answerChallenge(target, accept) {
+    const pair = [this._challengerOf(target), target];
+    const r = this.get(pair[0], pair[1]);
+    if (!r || r.type !== 'challenged' || r.decided) return false;
+    r.decided = true;
+    const challenger = r.challenger;
+    if (accept) {
+      this.relations.set(this.key(challenger, target), { type: 'war', until: 0, totalWar: true });
+      this.game.hookMsg?.(`⚔️ ${this.name(target)} ACCEPTS! Total war — fight until one kingdom falls!`);
+      if (this.game.isHuman?.(challenger) || this.game.isHuman?.(target)) this.game.warHorn?.();
+      try { this.game.onWarAccepted?.(challenger, target); } catch { /* ignore */ }
+    } else {
+      this.relations.set(this.key(challenger, target), { type: 'war', until: 0, totalWar: false });
+      this.game.hookMsg?.(`🚨 ${this.name(target)} REJECTS the challenge — ${this.name(challenger)} invades anyway!`);
+      if (this.game.isHuman?.(challenger) || this.game.isHuman?.(target)) this.game.warHorn?.();
+      try { this.game.onWarRejected?.(challenger, target); } catch { /* ignore */ }
+    }
+    return true;
+  }
+
+  _challengerOf(target) {
+    for (const [, r] of this.relations) {
+      if (r?.type === 'challenged' && !r.decided && r.target === target) return r.challenger;
+    }
+    return null;
+  }
+
+  challengeFor(target) {
+    for (const [, r] of this.relations) {
+      if (r?.type === 'challenged' && !r.decided && r.target === target) {
+        if (this.game.time < r.until) return r;
+      }
+    }
+    return null;
+  }
+
+  // sweep expired challenges (no answer = rejection → challenger invades)
+  update() {
+    for (const [k, r] of [...this.relations]) {
+      if (r?.type === 'challenged' && !r.decided && this.game.time >= r.until) {
+        this.answerChallenge(r.target, false);
+      }
+      void k;
+    }
   }
 }

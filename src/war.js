@@ -172,9 +172,12 @@ export function installWar(game, ai) {
         br.activeWars = Math.max(0, (br.activeWars || 0) - 1);
         if (reason === 'losing' || reason === 'wiped') {
           br.warCooldownUntil = game.time + WAR.cooldownSec;
-          // sue for peace: paid ceasefire if affordable, else a free truce
+          // total war never ends in negotiation — brief regroup, then back in
           const foe = br.wave?.foe;
-          if (foe && !game.diplomacy?.ceasefire(br.owner, foe, 10, br.owner)) {
+          if (foe && game.diplomacy?.isTotalWar?.(br.owner, foe)) {
+            br.warCooldownUntil = game.time + 20;
+          } else if (foe && !game.diplomacy?.ceasefire(br.owner, foe, 10, br.owner)) {
+            // sue for peace: paid ceasefire if affordable, else a free truce
             game.diplomacy?.truce(br.owner, foe);
           }
         }

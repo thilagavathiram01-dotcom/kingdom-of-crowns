@@ -158,6 +158,17 @@ export const PERSONALITY_WAR = {
 
 export const WORLD_EVENTS = { minGapSec: 300, maxGapSec: 480 };
 
+// Formal war declarations (mutual approval).
+// A challenge freezes fighting between the pair while both sides muster.
+// Accept = arranged total war until one kingdom falls. Reject (or timeout) =
+// the challenger invades anyway — but the defender got an alert + muster time.
+export const WAR_CHALLENGE = {
+  answerSec: 90,      // human answer window
+  aiAnswerMin: 8,     // AI deliberation delay
+  aiAnswerMax: 20,
+  formalChance: 0.4,  // share of AI invasions issued as formal challenges
+};
+
 // Diplomacy logistics (wood + food — no counts, no gold).
 // Every pact is bought, and breaking one costs mobilization.
 export const DIPLO = {

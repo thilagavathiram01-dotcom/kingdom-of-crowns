@@ -143,6 +143,22 @@ export class HUD {
       e.preventDefault(); e.stopPropagation();
       document.getElementById('app').classList.remove('rail-hidden'); buzz(8);
     });
+
+    // ---- formal war challenges: alert modal with live countdown ----
+    this.chModal = document.getElementById('challenge-modal');
+    window.addEventListener('war-challenge', (e) => this.onChallengeEvent(e.detail || {}));
+    window.addEventListener('war-accepted', () => this.hideChallenge());
+    window.addEventListener('war-rejected', () => this.hideChallenge());
+    document.getElementById('btn-ch-accept')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      game.diplomacy?.answerChallenge(game.humanId, true);
+      this.hideChallenge(); buzz(20);
+    });
+    document.getElementById('btn-ch-reject')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      game.diplomacy?.answerChallenge(game.humanId, false);
+      this.hideChallenge(); buzz(20);
+    });
     const panBtn = document.querySelector('#touchbar [data-act="pan"]');
     if (panBtn) panBtn.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -178,6 +194,30 @@ export class HUD {
     }, { passive: false });
   }
 
+  onChallengeEvent({ challenger, target }) {
+    const g = this.game;
+    if (target !== g.humanId) return; // our own challenges need no modal
+    const nm = g.players[challenger]?.name || challenger;
+    document.getElementById('ch-title').textContent = `⚔️ ${nm} declares WAR!`;
+    document.getElementById('ch-sub').textContent =
+      'Both armies are mustering in formation. Accept for arranged total war until one kingdom falls — reject and they invade anyway. Your troops hold position until you answer.';
+    this.chModal?.classList.remove('hidden');
+    buzz(60);
+  }
+
+  hideChallenge() {
+    this.chModal?.classList.add('hidden');
+  }
+
+  syncChallenge() {
+    if (!this.chModal || this.chModal.classList.contains('hidden')) return;
+    const g = this.game;
+    const r = g.diplomacy?.challengeFor?.(g.humanId);
+    if (!r) { this.hideChallenge(); return; }
+    const left = Math.max(0, Math.ceil(r.until - g.time));
+    const t = document.getElementById('ch-timer');
+    if (t) t.textContent = `${left}s to answer — silence means rejection`;
+  }
   setTab(name) {
     this.activeTab = name;
     document.querySelectorAll('.deck-tab').forEach(t =>
@@ -259,11 +299,12 @@ export class HUD {
       } catch { /* noop */ }
     }
     this.mmTimer += dt;
-    if (this.mmTimer > 0.1) {
+    if (this.mmTimer > 0.15) {
       this.mmTimer = 0;
       this.drawMinimap();
       this.refreshBuildButtons();
       this.syncBanner();
+      this.syncChallenge();
       document.querySelectorAll('#touchbar [data-order]').forEach(b =>
         b.classList.toggle('active', g.pendingOrder === b.dataset.order));
     }
@@ -702,13 +743,14 @@ export class HUD {
           for (const rid of rivals.slice(0, 6)) {
             const rel = dip.get(g.humanId, rid).type;
             const nm = g.players[rid]?.name || rid;
-            const badge = rel === 'alliance' ? '🤝 allied' : rel === 'ceasefire' ? '🕊️ ceasefire' : '⚔️ war';
+            const badge = rel === 'alliance' ? '🤝 allied' : rel === 'ceasefire' ? '🕊️ ceasefire' : rel === 'challenged' ? '📯 challenged — awaiting answer' : '⚔️ war';
             const row = document.createElement('div');
             row.className = 'side-hint';
             row.textContent = `${nm} — ${badge}`;
             this.elBuild.appendChild(row);
             const btn = (label, title, fn) => ap(this.actBtn('flag', label, title, () => { fn(); this.onSelect(g.selected); }));
             if (rel === 'war') {
+              btn('Declare War ⚔️', `Formal challenge to ${nm} — both sides muster, then fight on mutual approval (free)`, () => dip.challenge(g.humanId, rid));
               btn('Ceasefire 150🪵150🌾', `Buy 10 min peace with ${nm}`, () => dip.ceasefire(g.humanId, rid, 10, g.humanId));
               btn('Ally 300🪵300🌾', `Permanent alliance + shared vision with ${nm}`, () => dip.ally(g.humanId, rid, g.humanId));
               btn('Tribute 200🪵200🌾', `Pay tribute for 10 min peace with ${nm}`, () => dip.offerTribute(g.humanId, rid));

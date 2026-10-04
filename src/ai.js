@@ -121,6 +121,32 @@ export class KingdomBrain {
     return { x: (best.x - hq.x) / bd, z: (best.z - hq.z) / bd };
   }
 
+  // ---- formal challenge answer: weigh our mustered strength vs theirs ----
+  answerChallenge(S, hq) {
+    const g = this.game, P = this.P;
+    const ch = g.diplomacy?.challengeFor?.(this.owner);
+    if (!ch) { this._chAnswerAt = 0; return; }
+    if (!this._chAnswerAt) {
+      const lo = 8, hi = 20; // deliberate like a cautious lord
+      this._chAnswerAt = g.time + lo + Math.random() * (hi - lo);
+      this.status = `⚔️ Challenged by ${g.players[ch.challenger]?.name || ''}!`;
+      return;
+    }
+    if (g.time < this._chAnswerAt) {
+      this.status = `⚔️ Weighing ${g.players[ch.challenger]?.name || ''}'s challenge…`;
+      return;
+    }
+    this._chAnswerAt = 0;
+    const mine = this.power(S.army) + 1;
+    const theirs = this.foeStrength(ch.challenger);
+    const ratio = mine / theirs;
+    const grudge = this.grudges.get(ch.challenger)?.anger || 0;
+    const accept = ratio >= 1.0
+      || (P.militarism > 0.8 && ratio >= 0.8)   // warlords love a fair fight
+      || (grudge >= 4 && ratio >= 0.7);         // grudges override caution
+    g.diplomacy.answerChallenge(this.owner, accept);
+  }
+
   // ---------------------------------------------------------------- fort plan
   planFort(hq) {
     const g = this.game, A = CONFIG.ai, P = this.P;
@@ -321,6 +347,9 @@ export class KingdomBrain {
     if (!S.hq) { this.status = 'Fallen'; return; }
     const hq = S.hq;
     if (!this.fort) this.planFort(hq);
+
+    // ---- answer formal war challenges (deliberate, then accept or refuse) ----
+    this.answerChallenge(S, hq);
 
     // decay grudges
     for (const [k, gr] of this.grudges) {
@@ -524,6 +553,14 @@ export class KingdomBrain {
       }
     }
 
+    // ---- total war: no other target matters until the foe falls ----
+    const tw = g.diplomacy?.totalWarWith?.(this.owner);
+    if (tw && this.isAlive(tw) && !this.wave && sendable >= 4) {
+      this._betrayNext = false;
+      this.launch('invade', tw, avail.slice(0, sendable), hq);
+      return;
+    }
+
     // ---- opportunism: this kingdom's own read on who looks weak ----
     this.opT -= this.thinkEvery;
     if (this.opT > 0) return;
@@ -566,6 +603,15 @@ export class KingdomBrain {
     let roll = Math.random() * tot, chosen = pool[0];
     for (const c of pool) { roll -= c.w; if (roll <= 0) { chosen = c; break; } }
     this._betrayNext = !!chosen.betray;
+    // formal declaration: sometimes issue a challenge and muster instead of
+    // striking by surprise — the answer decides arranged war vs invasion
+    try {
+      const formalChance = 0.4;
+      if (!chosen.betray && g.diplomacy && Math.random() < formalChance
+        && g.diplomacy.challenge(this.owner, chosen.fid)) {
+        return;
+      }
+    } catch { /* fall through to surprise */ }
     this.launch('invade', chosen.fid, avail.slice(0, sendable), hq);
   }
 

@@ -146,6 +146,41 @@ export function installRealms(game, ai) {
     return true;
   };
 
+  // ---- formal war lifecycle (challenge → muster → accept/reject) ----
+  game.onChallenge = (challenger, target) => {
+    // both kingdoms arrange in war formation on their own ground and hold —
+    // no fighting while mustering, so nobody bleeds before the answer
+    game.musterFormation(challenger, target);
+    game.musterFormation(target, challenger);
+    try {
+      window.dispatchEvent(new CustomEvent('war-challenge', { detail: { challenger, target } }));
+    } catch { /* headless */ }
+  };
+  game.onWarAccepted = (challenger, target) => {
+    // both sides march: total war until one kingdom falls
+    game.releaseToWar(challenger, target);
+    game.releaseToWar(target, challenger);
+    for (const id of [challenger, target]) {
+      const br = game._brainOf?.(id);
+      if (br) { br.opT = 0; br.waveCD = 0; }
+    }
+    try {
+      window.dispatchEvent(new CustomEvent('war-accepted', { detail: { challenger, target } }));
+    } catch { /* headless */ }
+  };
+  game.onWarRejected = (challenger, target) => {
+    // rejected: the challenger invades anyway (warned defender, surprise lost)
+    const br = game._brainOf?.(challenger);
+    if (br) { br.opT = 0; br.waveCD = 3; }
+    if (game.isHuman(challenger)) {
+      game.hookMsg?.(`🚨 They refused honorable battle — lead your mustered army in! Right-click their base.`);
+      const army = game.units.filter((u) => !u.dead && u.owner === challenger && u.type !== 'worker');
+      for (const u of army) u.holdPosition = false;
+    }
+    try {
+      window.dispatchEvent(new CustomEvent('war-rejected', { detail: { challenger, target } }));
+    } catch { /* headless */ }
+  };
   // quick save / load keys (F5 / F9)
   window.addEventListener('keydown', (e) => {
     if (e.key === 'F5') { e.preventDefault(); quickSave(game); }
@@ -238,6 +273,7 @@ function realmTick(game, R, dt) {
   tickWonder(game, R, dt);
   tickChapters(game, R);
   R.events.update(dt);
+  game.diplomacy?.update?.(); // expire unanswered challenges (→ rejection)
   tickDayNight(game, R, dt);
   checkWins(game, R);
 }
