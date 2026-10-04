@@ -61,13 +61,21 @@ export class Game {
     const startLogs = CONFIG.startLogs ?? CONFIG.startCrystals;
     for (let i = 0; i < CONFIG.kingdoms; i++) {
       const id = `k${i}`;
+      const wood0 = startLogs * (i === 0 ? 1 : 0.9 + Math.random() * 0.3);
       this.players[id] = {
         id, idx: i, name: kingdomName(i), color: kingdomColor(i),
-        logs: startLogs * (i === 0 ? 1 : 0.9 + Math.random() * 0.3),
+        logs: wood0,
+        wood: wood0,
+        stone: (CONFIG.startStone ?? 150) * (i === 0 ? 1 : 0.9 + Math.random() * 0.3),
+        food: (CONFIG.startFood ?? 250) * (i === 0 ? 1 : 0.9 + Math.random() * 0.3),
+        gold: (CONFIG.startGold ?? 100) * (i === 0 ? 1 : 0.9 + Math.random() * 0.3),
+        crystal: (CONFIG.startCrystal ?? 300),
+        age: 0, shards: i === 0 ? 0 : 0, starving: false,
         get crystals() { return this.logs; },
         set crystals(v) { this.logs = v; },
         alive: true,
       };
+      this.players[id].crystal = this.players[id].logs;
     }
 
     // candidate HQ sites on a jittered grid; peaks are repelled from all of
@@ -988,6 +996,7 @@ export class Game {
     window.addEventListener('keydown', e => {
       const k = e.key.toLowerCase();
       this.keys[k] = true;
+      if (e.key === 'Shift') window.__shiftDown = true;
       if (k === ' ') { e.preventDefault(); this.focusSelection(); }
       if (k === 'f') this.selectArmy();
       if (k === 'h') this.focusHQ();
@@ -996,9 +1005,9 @@ export class Game {
       if (k === 'm') this.setOrderMode(this.pendingOrder === 'move' ? null : 'move');
       if (k === 'r' && this.placement) this.rotatePlacement(e.shiftKey ? -1 : 1);
       if (k === 'escape') { this.setOrderMode(null); this.cancelPlacement(); this.clearSelection(); }
-      // control groups: Shift+1..4 save, 1..4 recall
-      if (['1', '2', '3', '4'].includes(k)) {
-        if (e.shiftKey) {
+      // control groups: Ctrl/Shift+1..9 save, 1..9 recall (README-2 QoL)
+      if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(k)) {
+        if (e.shiftKey || e.ctrlKey || e.metaKey) {
           e.preventDefault();
           this.groups[k] = this.selected.filter(s => s.kind === 'unit' && s.owner === this.humanId && !s.dead).map(s => s.id);
           this.hookMsg(`Group ${k} saved (${this.groups[k].length} units) — press ${k} to recall`);
@@ -1014,8 +1023,23 @@ export class Game {
           }
         }
       }
+      // B opens the build menu, T assigns selected workers to nearest mill
+      if (k === 'b') { document.querySelector('.deck-tab[data-tab="build"]')?.click(); }
+      if (k === 't') {
+        const workers = this.selected.filter(s => s.kind === 'unit' && s.type === 'worker' && s.owner === this.humanId);
+        if (workers.length) {
+          let best = null, bd = 1e9;
+          for (const b of this.buildings) {
+            if (b.dead || b.owner !== this.humanId || b.type !== 'mill') continue;
+            const d = Math.hypot(b.x - workers[0].x, b.z - workers[0].z);
+            if (d < bd) { bd = d; best = b; }
+          }
+          if (best && this.assignToMill) this.assignToMill(workers, best);
+          else this.hookMsg('No Mill — build one near farms first');
+        }
+      }
     });
-    window.addEventListener('keyup', e => { this.keys[e.key.toLowerCase()] = false; });
+    window.addEventListener('keyup', e => { this.keys[e.key.toLowerCase()] = false; if (e.key === 'Shift') window.__shiftDown = false; });
     // MOBILE INPUT ONLY: keep canvas sized on rotate / URL-bar show-hide
     window.addEventListener('orientationchange', () => setTimeout(() => this.resize(), 120));
     if (window.visualViewport) window.visualViewport.addEventListener('resize', () => this.resize());
@@ -1212,13 +1236,29 @@ export class Game {
       const carriers = units.filter(u => u.type === 'worker' && u.carrying > 0);
       if (carriers.length) this.orderReturn(carriers, hit);
       else this.orderMove(units, pX, pZ);
+    } else if (hit && hit.kind === 'building' && hit.owner === units[0].owner && hit.type === 'mill') {
+      // right-click own Mill with workers = assign to mill (food chain)
+      const workers = units.filter(u => u.type === 'worker');
+      if (workers.length && this.assignToMill) this.assignToMill(workers, hit);
+      else this.orderMove(units, pX, pZ);
     } else {
-      this.orderMove(units, pX, pZ);
+      this.orderMove(units, pX, pZ, window.__shiftDown);
     }
   }
 
-  orderMove(units, x, z) {
-    // free placement: spread in formation around the clicked point
+  orderMove(units, x, z, queue = false) {
+    // Shift+right-click queues waypoints; group moves at slowest speed (formation)
+    if (queue) {
+      for (const u of units) {
+        u.wpQueue = u.wpQueue || [];
+        u.wpQueue.push({ x, z });
+        if (!u.hasOrder && !u.target) { const w = u.wpQueue.shift(); u.tx = w.x; u.tz = w.z; u.hasOrder = true; u.path = null; }
+      }
+      this.spawnPing(x, z, 0x93c5fd);
+      return;
+    }
+    const slowest = Math.min(...units.map(u => u.speed || 7));
+    // free placement: spread in box formation around the clicked point
     units.forEach((u, i) => {
       const a = (i / Math.max(1, units.length)) * Math.PI * 2;
       const r = Math.sqrt(units.length) * 0.9;
@@ -1230,6 +1270,8 @@ export class Game {
       u.target = null; u.objective = null; u.harvestTarget = null; u.returning = false;
       u.hasOrder = true; u.holdPosition = false; u.idleT = 0; u.path = null; u.attackMove = false;
       u.fireAnchor = null; u.repathT = 0;
+      u.wpQueue = null; // fresh order clears the queue
+      u.moveCap = slowest; // formation: nobody outruns the slowest
     });
     this.spawnPing(x, z, 0x4ade80);
   }
@@ -1510,16 +1552,18 @@ export class Game {
   // building placement with live ghost preview (barracks + turret + wall)
   startPlacement(type = 'barracks') {
     this.cancelPlacement();
-    const cost = type === 'turret' ? CONFIG.turretCost : type === 'wall' ? CONFIG.wallCost : CONFIG.barracksCost;
-    const name = type === 'turret' ? 'Defense Turret' : type === 'wall' ? 'Wall' : 'Barracks';
-    if (this.players[this.humanId].logs < cost) { this.hookMsg(`Need ${cost} logs for ${name}`); return; }
-    const st = CONFIG.buildings[type];
+    const costRes = this.buildingCostRes ? this.buildingCostRes(type) : { wood: this.buildingCost(type) };
+    const costN = costRes.wood ?? costRes.stone ?? costRes.gold ?? this.buildingCost(type);
+    const pretty = { turret: 'Defense Turret', tower: 'Watchtower', wall: 'Wall', hq: 'HQ', mill: 'Mill', farm: 'Farm', house: 'House', lumber: 'Lumber Camp', quarry: 'Quarry', depot: 'Crystal Depot', barracks: 'Barracks', archery: 'Archery Range', stable: 'Stable', siege: 'Siege Workshop', smith: 'Blacksmith', temple: 'Temple', market: 'Market', embassy: 'Embassy', wonder: 'Crown Hall (Wonder)' };
+    const name = pretty[type] || (type[0].toUpperCase() + type.slice(1));
+    if (!this.canAffordRes(this.humanId, costRes)) { this.hookMsg(`Need ${costN} resources for ${name}`); return; }
+    const st = CONFIG.buildings[type] || { size: 3.4 };
     const size = st.size;
     const ghostMat = new THREE.MeshBasicMaterial({ color: 0x4ade80, transparent: true, opacity: 0.4, depthWrite: false });
     // gizmo group carries the yaw so ghost + footprint ring rotate together
     const gizmo = new THREE.Group();
     let ghost, ringR;
-    if (type === 'turret') {
+    if (type === 'turret' || type === 'tower') {
       ghost = new THREE.Mesh(new THREE.CylinderGeometry(size * 0.45, size * 0.5, 1.6, 8), ghostMat);
       ringR = size * 0.6;
     } else if (type === 'wall') {
@@ -1561,9 +1605,10 @@ export class Game {
     if (!pl) return;
     const cx = THREE.MathUtils.clamp(x, -this.mapBound(6), this.mapBound(6));
     const cz = THREE.MathUtils.clamp(z, -this.mapBound(6), this.mapBound(6));
-    const ok = pl.type === 'wall'
-      ? this.wallSpotFree(cx, cz, pl.rot)
-      : this.isSpotFree(cx, cz, CONFIG.buildings[pl.type].size * 0.72);
+    let ok;
+    if (pl.type === 'wall') ok = this.wallSpotFree(cx, cz, pl.rot);
+    else if (this.realmPlacementValid) ok = this.realmPlacementValid(pl.type, cx, cz);
+    else ok = this.isSpotFree(cx, cz, CONFIG.buildings[pl.type].size * 0.72);
     pl.x = cx; pl.z = cz; pl.valid = ok;
     pl.gizmo.position.set(cx, this.gy(cx, cz), cz);
     pl.gizmo.rotation.y = pl.rot;
@@ -1575,10 +1620,12 @@ export class Game {
     const pl = this.placement;
     if (!pl) return;
     this.updateGhost(x, z);
-    if (!pl.valid) { this.hookMsg('Cannot build here — find open ground'); return; }
+    if (!pl.valid) { this.hookMsg('Cannot build here — slope / water / territory / needs nearby resource'); return; }
     let b = null;
     if (pl.type === 'turret') b = this.buildTurret(this.humanId, pl.x, pl.z);
     else if (pl.type === 'wall') b = this.buildWall(this.humanId, pl.x, pl.z, pl.rot);
+    else if (pl.type === 'barracks') b = this.buildBarracks(this.humanId, pl.x, pl.z);
+    else if (this.constructBuilding) b = this.constructBuilding(this.humanId, pl.type, pl.x, pl.z);
     else b = this.buildBarracks(this.humanId, pl.x, pl.z);
     if (b) this.resetRally(b);
     // walls chain: keep ghost alive so players can drag a wall line quickly
@@ -1642,23 +1689,72 @@ export class Game {
 
   // ---------- orders from UI ----------
   unitCost(type) {
-    return { worker: CONFIG.workerCost, soldier: CONFIG.soldierCost, brute: CONFIG.bruteCost, hunter: CONFIG.hunterCost, tank: CONFIG.tankCost, scout: CONFIG.scoutCost, artillery: CONFIG.artilleryCost }[type] ?? 100;
+    const table = {
+      worker: CONFIG.workerCost, soldier: CONFIG.soldierCost, brute: CONFIG.bruteCost,
+      hunter: CONFIG.hunterCost, tank: CONFIG.tankCost, scout: CONFIG.scoutCost, artillery: CONFIG.artilleryCost,
+      swordsman: 60, spearman: 50, archer: 55, knight: 110, healer: 60, catapult: 150, ram: 100, spy: 100,
+    };
+    return table[type] ?? 100;
+  }
+  unitCostRes(type) {
+    // README-2 multi-resource costs; legacy single-number costs bill wood/logs
+    const multi = {
+      worker: { food: 50 }, swordsman: { food: 60, crystal: 20 }, spearman: { food: 50, wood: 20 },
+      archer: { wood: 50, gold: 30 }, knight: { food: 90, crystal: 40 }, scout: { food: 40 },
+      healer: { gold: 60 }, catapult: { wood: 120, stone: 60 }, ram: { wood: 100 }, spy: { gold: 100 },
+      soldier: { food: 60, crystal: 20 }, tank: { food: 90, crystal: 40 }, brute: { food: 70, wood: 20 },
+      hunter: { food: 50, wood: 20 }, artillery: { wood: 120, stone: 60 },
+    };
+    if (multi[type]) return multi[type];
+    return { wood: this.unitCost(type) };
   }
   canTrain(building, type) {
-    if (building.type === 'hq') return type === 'worker';
-    if (building.type === 'barracks') return ['soldier', 'brute', 'hunter', 'tank', 'scout', 'artillery'].includes(type);
+    if (building.type === 'hq') return ['worker', 'scout'].includes(type);
+    if (building.type === 'barracks') return ['soldier', 'swordsman', 'spearman', 'brute', 'hunter', 'tank', 'scout', 'artillery', 'knight', 'catapult', 'ram'].includes(type);
+    if (building.type === 'archery') return ['archer', 'hunter', 'scout'].includes(type);
+    if (building.type === 'stable') return ['knight', 'scout', 'tank'].includes(type);
+    if (building.type === 'siege') return ['catapult', 'ram', 'artillery'].includes(type);
+    if (building.type === 'temple') return ['healer'].includes(type);
     return false;
+  }
+  // multi-resource banks; `logs` forever mirrors `wood` for legacy code/tests
+  bankOf(st, k) {
+    if (k === 'wood') return st.wood ?? st.logs ?? 0;
+    if (k === 'crystal') return st.crystal ?? st.logs ?? 0;
+    if (k === 'stone') return st.stone ?? st.logs ?? 0;
+    if (k === 'food') return st.food ?? st.logs ?? 0;
+    if (k === 'gold') return st.gold ?? st.logs ?? 0;
+    return st[k] ?? 0;
+  }
+  syncWood(st) { if (st.wood !== undefined && st.logs !== undefined) st.logs = st.wood; }
+  canAffordRes(owner, cost) {
+    const st = this.players[owner];
+    return Object.entries(cost || {}).every(([k, v]) => this.bankOf(st, k) >= v);
+  }
+  payRes(owner, cost) {
+    const st = this.players[owner];
+    for (const [k, v] of Object.entries(cost || {})) {
+      if (k === 'wood') {
+        if (st.wood !== undefined) st.wood = Math.max(0, st.wood - v);
+        else if (st.logs !== undefined) st.logs = Math.max(0, st.logs - v);
+        this.syncWood(st);
+      }
+      else if (st[k] !== undefined) st[k] = Math.max(0, st[k] - v);
+      else if (st.logs !== undefined) st.logs = Math.max(0, st.logs - v); // legacy bank
+    }
   }
   trainUnit(building, type) {
     if (!this.canTrain(building, type)) return false;
-    const cost = this.unitCost(type);
     const st = this.players[building.owner];
+    // legacy banks (only logs): charge the classic single price from logs
+    const legacy = st.food === undefined && st.gold === undefined && st.stone === undefined && st.crystal === undefined;
+    const cost = legacy ? { wood: this.unitCost(type) } : this.unitCostRes(type);
     const supplyUsed = this.units.filter(u => u.owner === building.owner && !u.dead).length;
     const supplyMax = this.supplyMax(building.owner);
-    if (st.logs < cost) { if (building.owner === this.humanId) this.hookMsg('Not enough logs'); return false; }
-    if (supplyUsed >= supplyMax) { if (building.owner === this.humanId) this.hookMsg('Supply blocked — build more Barracks'); return false; }
+    if (!this.canAffordRes(building.owner, cost)) { if (building.owner === this.humanId) this.hookMsg('Not enough resources'); return false; }
+    if (supplyUsed >= supplyMax) { if (building.owner === this.humanId) this.hookMsg('Supply blocked — build Houses & Barracks'); return false; }
     if (building.queue.length >= 5) return false;
-    st.logs -= cost;
+    this.payRes(building.owner, cost);
     building.queue.push({ type, t: CONFIG.trainTime[type] ?? 6 });
     return true;
   }
@@ -1711,7 +1807,7 @@ export class Game {
     let m = 0;
     for (const b of this.buildings) {
       if (b.owner !== owner || b.dead) continue;
-      m += b.type === 'hq' ? CONFIG.supplyPerHQ : b.type === 'barracks' ? CONFIG.supplyPerBarracks : 0;
+      m += b.type === 'hq' ? CONFIG.supplyPerHQ : b.type === 'barracks' ? CONFIG.supplyPerBarracks : b.type === 'house' ? (CONFIG.supplyPerHouse ?? 5) : 0;
     }
     return m;
   }
@@ -1720,9 +1816,27 @@ export class Game {
     return {
       barracks: CONFIG.barracksCost,
       turret: CONFIG.turretCost,
+      tower: 120,
       wall: CONFIG.wallCost,
+      house: 40, farm: 50, mill: 100, lumber: 40, quarry: 50, depot: 60,
+      archery: 130, stable: 200, siege: 320, smith: 160, temple: 160,
+      market: 150, embassy: 150, wonder: 1000,
       hq: 0,
     }[type] ?? 0;
+  }
+  buildingCostRes(type) {
+    const table = {
+      house: { wood: 40 }, farm: { wood: 50 }, mill: { wood: 80, stone: 20 },
+      lumber: { wood: 40 }, quarry: { wood: 50 }, depot: { wood: 60 },
+      barracks: { wood: 120, stone: 40 }, archery: { wood: 100, stone: 30 },
+      stable: { wood: 140, stone: 60 }, siege: { wood: 200, stone: 120 },
+      smith: { wood: 100, stone: 60 }, temple: { stone: 120, gold: 40 },
+      tower: { wood: 60, stone: 60 }, turret: { wood: 60, stone: 60 },
+      wall: { stone: 5 }, market: { wood: 100, stone: 50 },
+      embassy: { gold: 150 }, wonder: { stone: 1500, wood: 1000, gold: 800 },
+    };
+    if (table[type]) return table[type];
+    return { wood: this.buildingCost(type) };
   }
 
   demolishBuilding(b, { refund = true } = {}) {
@@ -1755,7 +1869,7 @@ export class Game {
     return true;
   }
 
-  hookMsg(t) { this.hooks.onMessage?.(t); }
+  hookMsg(t) { try { this.hooks?.onMessage?.(t); } catch { /* headless */ } }
 
   // ---------- update ----------
   resize() {
@@ -1910,6 +2024,53 @@ export class Game {
       if (d < bd) { bd = d; best = r; }
     }
     return best;
+  }
+
+  nearestResourceLike(x, z, rtype, maxD = 60) {
+    let best = null, bd = maxD;
+    for (const r of this.resources) {
+      if (r.rtype !== rtype || !this.resourceReady(r)) continue;
+      const d = Math.hypot(r.x - x, r.z - z);
+      if (d < bd) { bd = d; best = r; }
+    }
+    return best;
+  }
+
+  nearOwnBuilding(owner, x, z, type, maxD = 60) {
+    for (const b of this.buildings) {
+      if (b.dead || b.owner !== owner || b.type !== type) continue;
+      if (Math.hypot(b.x - x, b.z - z) <= maxD) return b;
+    }
+    return null;
+  }
+
+  spawnFloat(x, z, text, color = '#fff') {
+    // floating +N indicator (HUD-anchored div, lightweight)
+    try {
+      const el = document.createElement('div');
+      el.className = 'float-tick';
+      el.textContent = text;
+      el.style.color = color;
+      const v = this.worldToScreen?.(x, z);
+      if (v) { el.style.left = v.x + 'px'; el.style.top = v.y + 'px'; }
+      else { el.style.left = '50%'; el.style.top = '40%'; }
+      document.getElementById('app')?.appendChild(el);
+      setTimeout(() => el.remove(), 1200);
+    } catch { /* headless */ }
+  }
+
+  syncRock(n) {
+    // rocks shrink as they deplete, vanish at 0 (scale = 0.4 + 0.6 * frac)
+    try {
+      const frac = Math.max(0, (n.amount || 0) / (n.max || 400));
+      const s = 0.4 + 0.6 * frac;
+      if (n.mesh) n.mesh.scale.setScalar((n.baseScale || 1) * s);
+      if ((n.amount || 0) <= 0) {
+        n.amount = 0; n.depleted = true;
+        n.regrowT = 300 + Math.random() * 300;
+        if (n.mesh) n.mesh.visible = false;
+      }
+    } catch { /* ignore */ }
   }
 
   hqOf(owner) { return this.buildings.find(b => b.owner === owner && b.type === 'hq' && !b.dead); }
@@ -2244,10 +2405,14 @@ export class Game {
       u.path = null; u.repathT = 0;
     }
 
-    // WORKER harvesting — manual log runs: chop the assigned tree, haul to HQ,
-    // then stand idle. Workers never auto-seek trees on their own.
-    // Trees shrink as they are chopped and regrow from a stump, so logging never ends.
-    const CARRY = CONFIG.resource?.carryMax ?? 10;
+    // WORKER harvesting — wood from trees, stone from rocks, crystal nodes.
+    // Deposit routes by cargo type; Quarry doubles stone carry, Lumber/Depot speed returns.
+    const CARRY_BASE = CONFIG.resource?.carryMax ?? 10;
+    const carryOf = (unit) => {
+      if (unit?.cargo === 'stone' && this.nearOwnBuilding(unit.owner, unit.x, unit.z, 'quarry', 60)) return CARRY_BASE * 2;
+      return CARRY_BASE;
+    };
+    const CARRY = carryOf(u);
     if (u.type === 'worker' && u.harvestTarget && this.resourceReady(u.harvestTarget) && u.carrying < CARRY) {
       const n = u.harvestTarget;
       if (Math.hypot(n.x - u.x, n.z - u.z) > n.radius + 0.9) { this.navigate(u, n.x, n.z, dt, n.radius + 0.9, 3.0); return; }
@@ -2257,7 +2422,8 @@ export class Game {
         u.gathering = 0;
         const take = Math.min(CONFIG.units.worker.harvestRate, CARRY - u.carrying, n.amount);
         u.carrying += take; n.amount -= take;
-        this.syncTree(n);
+        u.cargo = n.rtype || 'tree';
+        if (n.rtype === 'rock') this.syncRock?.(n); else this.syncTree(n);
         this.burst(n.x, this.gy(n.x, n.z) + 1.5, n.z, 0x8b5a2b, 5, 2.5);
         this.burst(n.x, this.gy(n.x, n.z) + 2.4, n.z, 0x4ade80, 4, 2);
         if (n.amount <= 0) {
@@ -2289,8 +2455,18 @@ export class Game {
       const atDrop = u.dropX !== undefined && Math.hypot(u.dropX - u.x, u.dropZ - u.z) <= 0.85;
       if (Math.hypot(hq.x - u.x, hq.z - u.z) > hq.radius + 0.9 && !atDrop) { this.navigate(u, u.dropX, u.dropZ, dt, 0.8, 3.0); return; }
       u.path = null;
-      this.players[u.owner].logs += u.carrying;
-      u.carrying = 0; u.returning = false;
+      const pl = this.players[u.owner];
+      const amt = u.carrying;
+      const cargo = u.cargo || u.harvestTarget?.rtype || 'tree';
+      if (cargo === 'rock' || cargo === 'stone') {
+        if (pl.stone !== undefined) pl.stone += amt; else pl.logs = (pl.logs ?? 0) + amt;
+      }
+      else if (cargo === 'crystal') {
+        if (pl.crystal !== undefined) pl.crystal += amt; else pl.logs = (pl.logs ?? 0) + amt;
+      }
+      else { if (pl.wood !== undefined) pl.wood += amt; pl.logs = (pl.logs ?? 0) + amt; if (pl.wood !== undefined) pl.logs = pl.wood; }
+      this.spawnFloat?.(u.x, u.z, `+${Math.round(amt)}`, cargo === 'rock' ? '#9aa0a8' : cargo === 'crystal' ? '#7de8ff' : '#4ade80');
+      u.carrying = 0; u.returning = false; u.cargo = null;
       // delivery complete: stand idle, never auto-seek the next tree
       u.harvestTarget = null; u.harvestManual = false; u.hasOrder = false;
       u.dropX = null; u.dropZ = null; u.dropFor = null;
@@ -2361,7 +2537,14 @@ export class Game {
     // MOVE order
     if (u.hasOrder) {
       if (this.navigate(u, u.tx, u.tz, dt, 0.6, 2.5) === 'arrived') {
+        // Shift-queue: pop the next waypoint instead of idling
+        if (u.wpQueue && u.wpQueue.length) {
+          const w = u.wpQueue.shift();
+          u.tx = w.x; u.tz = w.z; u.path = null; u.repathT = 0;
+          return;
+        }
         u.hasOrder = false; u.attackMove = false; u.path = null;
+        u.moveCap = null; // formation released on arrival
         // soldiers on attack-move engage nearby
         if (u.type !== 'worker') {
           const e = this.nearestEnemy(u.x, u.z, u.owner, u.aggro);
@@ -2742,7 +2925,7 @@ export class Game {
     let vz = dz + sz * (combat && d <= 3 ? 0.9 : 1.4);
     const vl = Math.hypot(vx, vz) || 1;
     vx /= vl; vz /= vl;
-    const step = Math.min(u.speed * dt, d);
+    const step = Math.min(Math.min(u.speed, u.moveCap || u.speed) * dt, d);
     let nx = u.x + vx * step, nz = u.z + vz * step;
     // slide around terrain/buildings: try full step, then left/right deflects
     const blocked = (px, pz) => {
@@ -2863,9 +3046,15 @@ export class Game {
     return best;
   }
 
-  damage(ent, amt, attacker) {
+  damage(ent, amt, attacker, attackerType) {
     if (ent.dead || this.over) return;
-    ent.hp -= amt;
+    // README-2 counter triangle x1.5 (spear>knight, knight>archer, archer>infantry)
+    let mul = 1;
+    try {
+      const row = { spearman: { knight: 1.5 }, knight: { archer: 1.5 }, archer: { swordsman: 1.5, spearman: 1.5, soldier: 1.5 } }[attackerType];
+      if (row && ent.type && row[ent.type]) mul = row[ent.type];
+    } catch { /* ignore */ }
+    ent.hp -= amt * mul;
     // reveal + refresh the health bar on first damage (bars stay hidden at full HP)
     if (ent.bar && ent.kind === 'building' && ent.hp > 0) {
       ent.bar.visible = true;

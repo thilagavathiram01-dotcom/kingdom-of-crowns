@@ -2,10 +2,18 @@ import { CONFIG } from './config.js';
 import { icon } from './icons.js';
 
 const UNIT_META = {
-  worker: { name: 'Worker', icon: 'worker', cost: () => CONFIG.workerCost, desc: 'Chops trees for logs' },
+  worker: { name: 'Worker', icon: 'worker', cost: () => CONFIG.workerCost, desc: 'Gather, build, mill (50 food)' },
   soldier: { name: 'Soldier', icon: 'soldier', cost: () => CONFIG.soldierCost, desc: 'Core fighter' },
+  swordsman: { name: 'Swordsman', icon: 'soldier', cost: () => 60, desc: 'Frontline · 60 food + 20 crystal' },
+  spearman: { name: 'Spearman', icon: 'spear', cost: () => 50, desc: 'Anti-cavalry ×1.5 vs Knight' },
+  archer: { name: 'Archer', icon: 'archer', cost: () => 55, desc: 'Ranged ×1.5 vs infantry' },
+  knight: { name: 'Knight', icon: 'knight', cost: () => 110, desc: 'Fast heavy ×1.5 vs Archer' },
+  scout: { name: 'Scout', icon: 'scout', cost: () => CONFIG.scoutCost, desc: 'Fast, huge sight · intel' },
+  healer: { name: 'Healer', icon: 'healer', cost: () => 60, desc: 'Heals nearby (Temple)' },
+  catapult: { name: 'Catapult', icon: 'artillery', cost: () => 150, desc: 'Siege vs walls/towers' },
+  ram: { name: 'Ram', icon: 'ram', cost: () => 100, desc: 'Gate breaker, 200 HP' },
+  spy: { name: 'Spy', icon: 'scout', cost: () => 100, desc: 'Reveals enemy, sabotage' },
   tank: { name: 'Tank', icon: 'tank', cost: () => CONFIG.tankCost, desc: 'Heavy armor' },
-  scout: { name: 'Scout', icon: 'scout', cost: () => CONFIG.scoutCost, desc: 'Fast, huge sight' },
   artillery: { name: 'Artillery', icon: 'artillery', cost: () => CONFIG.artilleryCost, desc: 'Long-range splash' },
   brute: { name: 'Brute', icon: 'brute', cost: () => CONFIG.bruteCost, desc: 'Caveman club brawler' },
   hunter: { name: 'Hunter', icon: 'hunter', cost: () => CONFIG.hunterCost, desc: 'Caveman spear thrower' },
@@ -13,7 +21,22 @@ const UNIT_META = {
 const BLD_META = {
   barracks: { name: 'Barracks', icon: 'barracks', cost: () => CONFIG.barracksCost },
   turret: { name: 'Turret', icon: 'turret', cost: () => CONFIG.turretCost },
+  tower: { name: 'Watchtower', icon: 'turret', cost: () => 120 },
   wall: { name: 'Wall', icon: 'wall', cost: () => CONFIG.wallCost },
+  house: { name: 'House', icon: 'home', cost: () => 40 },
+  farm: { name: 'Farm', icon: 'farm', cost: () => 50 },
+  mill: { name: 'Mill', icon: 'mill', cost: () => 100 },
+  lumber: { name: 'Lumber Camp', icon: 'harvest', cost: () => 40 },
+  quarry: { name: 'Quarry', icon: 'quarry', cost: () => 50 },
+  depot: { name: 'Crystal Depot', icon: 'harvest', cost: () => 60 },
+  archery: { name: 'Archery Range', icon: 'archer', cost: () => 130 },
+  stable: { name: 'Stable', icon: 'knight', cost: () => 200 },
+  siege: { name: 'Siege Workshop', icon: 'artillery', cost: () => 320 },
+  smith: { name: 'Blacksmith', icon: 'shield', cost: () => 160 },
+  temple: { name: 'Temple', icon: 'healer', cost: () => 160 },
+  market: { name: 'Market', icon: 'gold', cost: () => 150 },
+  embassy: { name: 'Embassy', icon: 'home', cost: () => 150 },
+  wonder: { name: 'Crown Hall', icon: 'crown', cost: () => 1000 },
 };
 
 function buzz(ms = 12) {
@@ -199,7 +222,7 @@ export class HUD {
     const g = this.game;
     const p = g.players[g.humanId];
     const used = g.units.filter(u => u.owner === g.humanId && !u.dead).length;
-    const cry = Math.floor(p.logs);
+    const cry = Math.floor(p.crystal ?? p.logs);
     if (this.elCrystal.textContent !== String(cry)) {
       this.elCrystal.textContent = cry;
       if (this.lastCrystal !== null && cry !== this.lastCrystal) {
@@ -208,6 +231,18 @@ export class HUD {
       }
       this.lastCrystal = cry;
     }
+    // README-2 five-resource HUD + food upkeep warning + age
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (el && el.textContent !== String(v)) el.textContent = v;
+    };
+    set('res-wood', Math.floor(p.wood ?? p.logs ?? 0));
+    set('res-stone', Math.floor(p.stone ?? 0));
+    set('res-food', Math.floor(p.food ?? 0));
+    set('res-gold', Math.floor(p.gold ?? 0));
+    set('res-age', ['I', 'II', 'III', 'IV'][p.age || 0] || 'I');
+    const fw = document.getElementById('res-food-wrap');
+    if (fw) fw.classList.toggle('danger', !!p.starving);
     const sup = `${used}/${g.supplyMax(g.humanId)}`;
     if (this.elSupply.textContent !== sup) this.elSupply.textContent = sup;
     if (this.elTime) {
@@ -278,8 +313,10 @@ export class HUD {
   // Tiles are built once per selection and only have disabled/badges updated
   // in place, so taps never land on a button that is being rebuilt mid-press.
   trainBtn(building, type) {
-    const meta = UNIT_META[type];
+    const meta = UNIT_META[type] || { name: type, icon: 'shield', cost: () => 100, desc: type };
     const cost = meta.cost();
+    const multi = this.game.unitCostRes ? this.game.unitCostRes(type) : { wood: cost };
+    const badge = Object.entries(multi).map(([k, v]) => `${v}${k === 'food' ? '🍖' : k === 'wood' ? '🪵' : k === 'stone' ? '🪨' : k === 'gold' ? '🪙' : '💎'}`).join(' ');
     const g = this.game;
     const b = document.createElement('button');
     b.className = 'tile';
@@ -287,9 +324,9 @@ export class HUD {
     b.dataset.bid = building.id;
     b.dataset.utype = type;
     b.dataset.cost = cost;
-    b.title = `${meta.name} — ${meta.desc} (🪵${cost})`;
+    b.title = `${meta.name} — ${meta.desc} (${badge})`;
     b.setAttribute('aria-label', `Train ${meta.name}`);
-    b.innerHTML = `${icon(meta.icon)}<span class="tile-name">${meta.name}</span><span class="tile-cost">🪵${cost}</span><span class="tile-q hidden"></span>`;
+    b.innerHTML = `${icon(meta.icon)}<span class="tile-name">${meta.name}</span><span class="tile-cost">${badge}</span><span class="tile-q hidden"></span>`;
     b.onclick = (e) => { e.stopPropagation(); g.trainUnit(building, type); buzz(12); this.onSelect(g.selected); };
     b.onmousedown = (e) => e.stopPropagation();
     b.onmouseup = (e) => e.stopPropagation();
@@ -367,14 +404,63 @@ export class HUD {
       if (single.type === 'hq') {
         this.elBuild.appendChild(rallyHint);
         ap(this.trainBtn(single, 'worker'));
+        ap(this.trainBtn(single, 'scout'));
+        const ages = ['I. Village', 'II. Castle (300🍖 200🪵 100🪨)', 'III. Kingdom', 'IV. Empire'];
+        const age = g.players[g.humanId].age || 0;
+        ap(this.actBtn('home', `Age Up → ${ages[Math.min(3, age + 1)]}`, 'unlocks new units & buildings', () => { g.ageUp?.(g.humanId); this.onSelect(g.selected); }));
+        for (const t of ['house', 'farm', 'mill', 'lumber', 'quarry', 'depot']) {
+          const m = BLD_META[t];
+          ap(this.actBtn(m.icon, m.name, `place ${m.name}`, () => g.startPlacement(t), m.cost()));
+        }
         ap(this.actBtn('barracks', 'Barracks', '+supply, unlocks army', () => g.startPlacement('barracks'), CONFIG.barracksCost));
         ap(this.actBtn('turret', 'Turret', 'auto-defense', () => g.startPlacement('turret'), CONFIG.turretCost));
+        ap(this.actBtn('tower', 'Watchtower', 'vision +40m, shoots', () => g.startPlacement('tower'), 120));
         ap(this.actBtn('wall', 'Wall', 'chain-place blocker', () => g.startPlacement('wall'), CONFIG.wallCost));
+        for (const t of ['archery', 'stable', 'siege', 'smith', 'temple', 'market', 'embassy']) {
+          const m = BLD_META[t];
+          ap(this.actBtn(m.icon, m.name, `place ${m.name}`, () => g.startPlacement(t), m.cost()));
+        }
+        ap(this.actBtn('crown', 'Crown Hall (Wonder)', 'win: hold 5 min', () => g.startPlacement('wonder'), 1000));
       } else if (single.type === 'barracks') {
         this.elBuild.appendChild(rallyHint);
-        for (const t of ['soldier', 'brute', 'hunter', 'scout', 'tank', 'artillery']) ap(this.trainBtn(single, t));
+        for (const t of ['soldier', 'swordsman', 'spearman', 'brute', 'hunter', 'scout', 'knight', 'tank', 'catapult', 'ram', 'artillery']) ap(this.trainBtn(single, t));
         ap(demolish());
         ap(this.actBtn('wall', 'Wall', 'wall off chokes', () => g.startPlacement('wall'), CONFIG.wallCost));
+      } else if (single.type === 'archery') {
+        for (const t of ['archer', 'hunter', 'scout']) ap(this.trainBtn(single, t));
+        ap(demolish());
+      } else if (single.type === 'stable') {
+        for (const t of ['knight', 'scout', 'tank']) ap(this.trainBtn(single, t));
+        ap(demolish());
+      } else if (single.type === 'siege') {
+        for (const t of ['catapult', 'ram', 'artillery']) ap(this.trainBtn(single, t));
+        ap(demolish());
+      } else if (single.type === 'temple') {
+        ap(this.trainBtn(single, 'healer'));
+        ap(demolish());
+      } else if (single.type === 'mill') {
+        const n = (single.workers || []).length;
+        const hint = document.createElement('div');
+        hint.className = 'side-hint';
+        hint.textContent = `Mill workers ${n}/4 — right-click mill with workers, or press T. Blades spin while grinding.`;
+        this.elBuild.appendChild(hint);
+        ap(this.actBtn('worker', 'Assign workers', 'selected workers → this mill', () => {
+          const ws = g.selected.filter(s => s.kind === 'unit' && s.type === 'worker' && s.owner === g.humanId);
+          const list = ws.length ? ws : g.units.filter(u => u.owner === g.humanId && u.type === 'worker' && !u.dead && !u.assignedMill).slice(0, 4 - n);
+          if (list.length) g.assignToMill?.(list, single);
+          else g.hookMsg('Select workers first, then Assign');
+        }));
+        ap(demolish());
+      } else if (single.type === 'farm' || single.type === 'market' || single.type === 'embassy' || single.type === 'house' || single.type === 'lumber' || single.type === 'quarry' || single.type === 'depot' || single.type === 'smith' || single.type === 'wonder') {
+        const hint = document.createElement('div');
+        hint.className = 'side-hint';
+        hint.textContent = single.type === 'farm' ? `Grain ${(single.grain || 0).toFixed(0)}/40 — feeds mills within 25m`
+          : single.type === 'market' ? 'Sends a caravan every 90s → gold (×2 during Merchant Fair)'
+          : single.type === 'embassy' ? 'Ceasefires & alliances live here'
+          : single.type === 'wonder' ? 'Hold at full HP for 5:00 to win'
+          : `${single.type} — working for the crown`;
+        this.elBuild.appendChild(hint);
+        ap(demolish());
       } else if (single.type === 'wall') {
         const hint = document.createElement('div');
         hint.className = 'side-hint';
@@ -429,6 +515,14 @@ export class HUD {
     if (g.terrainThumb) c.drawImage(g.terrainThumb, 0, 0, W, Hh);
     else { c.fillStyle = '#0a1410'; c.fillRect(0, 0, W, Hh); }
     const hex = (id) => '#' + (g.teamColor(id) ?? 0x888888).toString(16).padStart(6, '0');
+    // territory glow around each HQ in kingdom colours
+    for (const b of g.buildings) {
+      if (b.dead || b.type !== 'hq') continue;
+      c.strokeStyle = hex(b.owner);
+      c.globalAlpha = 0.35; c.lineWidth = 2;
+      c.beginPath(); c.arc(wx(b.x), wz(b.z), 14, 0, Math.PI * 2); c.stroke();
+      c.globalAlpha = 1;
+    }
     for (const b of g.buildings) {
       if (b.dead || !b.mesh.visible) continue;
       c.fillStyle = hex(b.owner);
@@ -439,9 +533,9 @@ export class HUD {
         c.strokeRect(wx(b.x) - s / 2 - 1, wz(b.z) - s / 2 - 1, s + 2, s + 2);
       }
     }
-    c.fillStyle = '#4ade80';
     for (const r of g.resources) {
       if (r.dead || r.depleted) continue;
+      c.fillStyle = r.rtype === 'rock' ? '#9aa0a8' : r.rtype === 'crystal' ? '#7de8ff' : '#4ade80';
       c.fillRect(wx(r.x) - 1, wz(r.z) - 1, 2, 2);
     }
     let dots = 0;

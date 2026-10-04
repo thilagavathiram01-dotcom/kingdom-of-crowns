@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { Game } from './game.js';
 import { AIManager } from './ai.js';
 import { HUD } from './ui.js';
+import { installRealms } from './realms.js';
+import { installWar } from './war.js';
 import { loadWorkerModels, loadAdventurerModels } from './workers3d.js';
 import { loadBuildingModels } from './buildings3d.js';
 
@@ -210,6 +212,8 @@ async function boot() {
   }
 
   ai = new AIManager(game);
+  installRealms(game, ai);
+  installWar(game, ai);
   hud = new HUD(game, ai);
   hud.onSelect([]);
 
