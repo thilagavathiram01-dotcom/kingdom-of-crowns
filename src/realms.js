@@ -348,34 +348,36 @@ function aiEconomyFor(game, id) {
   const supplyMax = game.supplyMax(id);
   const supplyUsed = armyN + workerN;
 
-  // scale ambition with age + time (the brain's army/harvest targets grow too)
+  // scale ambition with supply + age (never with the clock)
   const brain = game._brainOf?.(id);
   if (brain?.P) {
     if (brain.P.baseWant === undefined) { brain.P.baseWant = brain.P.wantArmy; brain.P.baseWorkers = brain.P.targetWorkers; }
-    brain.P.wantArmy = Math.min(40, brain.P.baseWant + age * 5 + Math.floor(game.time / 150));
-    brain.P.targetWorkers = Math.min(16, brain.P.baseWorkers + age * 2);
+    const supplyMax = game.supplyMax(id);
+    const millsN = game.buildings.filter((b) => !b.dead && b.owner === id && b.type === 'mill').length;
+    brain.P.wantArmy = Math.min(40, brain.P.baseWant + age * 5 + Math.floor(supplyMax / 12));
+    brain.P.targetWorkers = Math.min(16, brain.P.baseWorkers + age * 2 + millsN);
   }
 
   // 1. supply: houses just behind the keep when capped (one per tick)
-  if (supplyUsed >= supplyMax - 2 && game.time > 50) {
+  if (supplyUsed >= supplyMax - 2 && workerN >= 4) {
     const foe = nearestFoeHq(game, id);
     const dx = foe ? hq.x - foe.x : 10, dz = foe ? hq.z - foe.z : 10;
     const d = Math.hypot(dx, dz) || 1;
     const s = game.findFreeSpot(hq.x + (dx / d) * 16, hq.z + (dz / d) * 16, 2);
     if (s && tryBuild('house', s.x, s.z)) return;
   }
-  // 2. food core: first mill + farm ring, second mill later
-  const wantMills = game.time > 480 ? 2 : 1;
-  if (count('mill') < wantMills && game.time > 90) {
+  // 2. food core: first mill once hands exist, second mill for big crews
+  const wantMills = workerN >= 10 ? 2 : 1;
+  if (count('mill') < wantMills && workerN >= 5) {
     if (buildOne('mill', wantMills, hq.x, hq.z, 14, 2.5)) return;
   }
   const mills = game.buildings.filter((b) => !b.dead && b.owner === id && b.type === 'mill');
-  if (mills.length && count('farm') < mills.length * 3 && game.time > 120) {
+  if (mills.length && count('farm') < mills.length * 3 && workerN >= 4) {
     const m = mills[count('farm') % mills.length];
     if (buildOne('farm', mills.length * 3, m.x, m.z, 12, 2.5)) return;
   }
   // 3. wood: lumber camp toward the nearest forest, inside our land
-  if (count('lumber') < (game.time > 420 ? 2 : 1) && game.time > 100) {
+  if (count('lumber') < (workerN >= 9 ? 2 : 1) && workerN >= 5) {
     const tree = game.nearestResourceLike?.(hq.x, hq.z, 'tree', 200);
     if (tree) {
       // anchor between HQ and forest, clamped inside territory
@@ -417,16 +419,19 @@ function aiEconomyFor(game, id) {
       break; // one upgrade per tick max
     }
   }
-  // 6. age up when the town can carry it
-  if (game.time > 300 && (st.age || 0) < 3) {
+  // 6. age up when the town can carry it (crew + barracks, cost checked inside)
+  if ((st.age || 0) < 3) {
     const ages = [{}, { food: 250, wood: 200 }, { food: 500, wood: 400 }, { food: 900, wood: 800 }];
     const cost = ages[(st.age || 0) + 1];
     if (cost && canAfford(st, cost) && count('barracks') >= 1 && workerN >= 8) {
       if (game.ageUp?.(id)) return;
     }
   }
-  // 7. territory expansion: found a forward town toward the foe (chains land)
-  if (game.time > 720 && game.hqCount(id) < MAX_HQ_PER_KINGDOM && count('barracks') >= 2 && armyN >= 12) {
+  // 7. territory expansion: found a forward town toward the foe (chains land).
+  // Gated by satisfaction — strong crew, standing army, and a real surplus
+  // past the founding price — never by a timer.
+  const surplusWood = (st.wood ?? st.logs ?? 0) - NEW_HQ_COST.wood;
+  if (game.hqCount(id) < MAX_HQ_PER_KINGDOM && count('barracks') >= 2 && armyN >= 10 && surplusWood >= 400) {
     const foe = nearestFoeHq(game, id);
     if (foe) {
       const dx = foe.x - hq.x, dz = foe.z - hq.z, d = Math.hypot(dx, dz) || 1;
@@ -569,12 +574,13 @@ function checkWins(game, R) {
   const alive = game.aliveKingdoms();
   const me = game.players[game.humanId];
   // Conquest: only the human remains
-  if (me?.alive && alive.length === 1) return gameOver(game, true, 'Conquest — all 29 rivals destroyed!');
+  if (me?.alive && alive.length === 1) return gameOver(game, true, 'Conquest — all ' + (CONFIG.kingdoms - 1) + ' rivals destroyed!');
   if (!me?.alive) return gameOver(game, false, 'Your HQ has fallen.');
-  // Shard Collector: 15 of 30 shards
+  // Shard Collector: hold half the shards on the map
+  const SHARD_GOAL = Math.max(2, Math.ceil(CONFIG.kingdoms / 2));
   for (const id of alive) {
-    if ((game.players[id].shards || 0) >= 15) {
-      return gameOver(game, game.isHuman(id), `${game.players[id].name} united 15 crown shards!`);
+    if ((game.players[id].shards || 0) >= SHARD_GOAL) {
+      return gameOver(game, game.isHuman(id), `${game.players[id].name} united ${SHARD_GOAL} crown shards!`);
     }
   }
   // Crown Hall: hold 5 minutes

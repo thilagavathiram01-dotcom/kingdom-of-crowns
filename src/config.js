@@ -1,9 +1,11 @@
 import { PLAYER_COLOR, kingdomColor as goldenColor } from './palette.js';
 
 export const CONFIG = {
-  mapSize: 500,               // vast continent: 30 kingdoms rise far apart
-  kingdoms: 30,               // 1 human + 29 AI
-  kingdomSpacing: 76,         // hard floor (metres) between any two kingdoms
+  mapSize: 600,               // big continent: 12 kingdoms rise far apart
+  kingdoms: 12,               // 1 human + 11 AI
+  kingdomSpacing: 140,        // hard floor (metres) between any two kingdoms —
+                               // wider than 2x the L1 HQ radius (70) so no two
+                               // territory circles overlap at game start
   startLogs: 300,             // opening timber stockpile (logs from trees)
   startWood: 300,
   startFood: 250,
@@ -83,8 +85,8 @@ export const CONFIG = {
     fortHalf: [16, 21],
     gateWidth: 10,
     wallStep: 4.6,
-    readyAt: [420, 780],
-    peaceMin: 240,
+    readyAt: [30, 90],
+    peaceMin: 45,
   },
 
   terrain: {

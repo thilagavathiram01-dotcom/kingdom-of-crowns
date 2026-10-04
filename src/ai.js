@@ -73,7 +73,7 @@ export class KingdomBrain {
     this.hitT = -1e9;           // last time anything of mine was hit
     this.wave = null;
     this.waveCD = rand(30, 90);
-    this.opT = rand(40, 100);
+    this.opT = rand(15, 35);
     this.scanT = 0;
     this.scan = null;
 
@@ -329,23 +329,41 @@ export class KingdomBrain {
 
   chooseUnit(S) {
     const g = this.game, P = this.P;
-    const queued = (type) => S.rax.reduce((n, b) => n + b.queue.filter(q => q.type === type).length, 0);
+    const owner = S.hq?.owner || S.rax[0]?.owner;
+    // capability gates (not clocks): advanced troops need the production
+    // building standing, elites need a real army to screen them
+    const built = (t) => {
+      for (const b of g.buildings) if (!b.dead && b.owner === owner && b.type === t) return true;
+      return false;
+    };
+    const queued = (type) => S.prod.reduce((n, b) => n + b.queue.filter(q => q.type === type).length, 0);
     const have = (type) => S.army.filter(u => u.type === type).length + queued(type);
     const roll = Math.random();
-    if (g.time > 420 && have('tank') < Math.ceil(P.tankShare * P.wantArmy) && roll < 0.5) return 'tank';
-    if (g.time > 540 && have('artillery') < Math.ceil(P.artShare * P.wantArmy) && roll < 0.4) return 'artillery';
+    if (built('stable') && have('tank') < Math.ceil(P.tankShare * P.wantArmy) && roll < 0.5) return 'tank';
+    if (built('siege') && have('artillery') < Math.ceil(P.artShare * P.wantArmy) && roll < 0.4) return 'artillery';
     // caveman troops: brutes lead assaults, hunters screen from behind
-    if (g.time > 150 && have('brute') < Math.ceil(0.3 * P.wantArmy) && roll < 0.42) return 'brute';
-    if (g.time > 210 && have('hunter') < Math.ceil(0.35 * P.wantArmy) && roll < 0.5) return 'hunter';
+    if (S.rax.length >= 2 && have('brute') < Math.ceil(0.3 * P.wantArmy) && roll < 0.42) return 'brute';
+    if (built('archery') && have('hunter') < Math.ceil(0.35 * P.wantArmy) && roll < 0.5) return 'hunter';
     return 'soldier';
+  }
+
+  // pick a free production building that can actually train this unit
+  producerFor(S, type) {
+    const g = this.game;
+    const cap = S.logs > 380 ? 2 : 1;
+    for (const b of S.prod) {
+      if (b.queue.length < cap && g.canTrain(b, type)) return b;
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------- think
   gather() {
     const g = this.game, id = this.owner;
     const S = {
-      workers: [], army: [], hq: null, rax: [], turrets: [], walls: 0,
+      workers: [], army: [], hq: null, rax: [], prod: [], turrets: [], walls: 0,
       logs: g.players[id].logs, supplyUsed: 0, supplyMax: g.supplyMax(id),
+      age: g.players[id].age || 0,
     };
     for (const u of g.units) {
       if (u.owner !== id || u.dead) continue;
@@ -355,7 +373,8 @@ export class KingdomBrain {
     for (const b of g.buildings) {
       if (b.owner !== id || b.dead) continue;
       if (b.type === 'hq') S.hq = b;
-      else if (b.type === 'barracks') S.rax.push(b);
+      else if (b.type === 'barracks') { S.rax.push(b); S.prod.push(b); }
+      else if (['archery', 'stable', 'siege', 'temple'].includes(b.type)) S.prod.push(b);
       else if (b.type === 'turret') S.turrets.push(b);
       else S.walls++;
     }
@@ -459,9 +478,11 @@ export class KingdomBrain {
     const pl = g.players[id];
     const recentHit = (t - this.hitT) < 90;
     const hq = S.hq;
-    const armyQ = S.rax.reduce((n, b) => n + b.queue.length, 0);
-    const surplus = Math.max(0, pl.logs - 500);
-    const wantNow = Math.min(P.wantArmy, 6 + Math.floor(t / 45)) + Math.min(10, Math.floor(surplus / 250));
+    const armyQ = S.prod.reduce((n, b) => n + b.queue.length, 0);
+    const surplus = Math.max(0, (pl.wood ?? pl.logs ?? 0) - 500);
+    // satisfaction-driven target: grow supply (houses/HQ/barracks) and age,
+    // and the army target follows — no clock anywhere
+    const wantNow = Math.min(P.wantArmy, 4 + Math.floor(S.supplyMax / 5) + S.age * 2) + Math.min(10, Math.floor(surplus / 250));
 
     for (let guard = 0; guard < 10; guard++) {
       S.logs = pl.logs;
@@ -476,7 +497,8 @@ export class KingdomBrain {
       }
 
       // barracks: the only source of supply + army production
-      const goalRax = Math.min(P.maxBarracks, 1 + Math.floor(t / P.raxPace));
+      // more mouths to feed and more supply → more production (no clock)
+      const goalRax = Math.min(P.maxBarracks, 1 + Math.floor(S.supplyUsed / 8) + Math.floor(S.army.length / 6));
       const blocked = S.supplyUsed >= S.supplyMax - 2;
       if (S.rax.length < P.maxBarracks && (blocked || S.rax.length < goalRax) && S.workers.length >= 4) {
         opts.push({ k: 'barracks', u: blocked ? 1.1 : 0.55 + 0.1 * (goalRax - S.rax.length), cost: CONFIG.barracksCost,
@@ -489,20 +511,23 @@ export class KingdomBrain {
           } });
       }
 
-      // army from every idle barracks
+      // army from every idle production building (satisfaction-driven: the
+      // target grows with supply and age, not with the clock)
       if (S.army.length + armyQ < wantNow && supplyFree) {
-        const idle = S.rax.find(b => b.queue.length < (S.logs > 380 ? 2 : 1));
-        if (idle) {
-          const type = this.chooseUnit(S);
+        const type = this.chooseUnit(S);
+        const prod = this.producerFor(S, type);
+        if (prod) {
           opts.push({ k: 'army', u: 0.6 + 0.5 * P.militarism * (1 - S.army.length / Math.max(1, wantNow)), cost: g.unitCost(type),
-            go: () => g.trainUnit(idle, type) });
+            go: () => g.trainUnit(prod, type) });
         }
       }
 
       // towers (gate kill-zones first), unlocked gradually unless we are being hit
       const builtT = S.turrets.length;
-      const allowedT = recentHit || threat ? this.towers.length : Math.min(this.towers.length, Math.floor((t - 150) / 80) + 1);
-      if (t > 120 && builtT < allowedT && S.rax.length >= 1 && S.workers.length >= 5) {
+      // towers grow with the town (production base), immediately when hit
+      const townSize = S.rax.length + S.prod.length + S.workers.length;
+      const allowedT = recentHit || threat ? this.towers.length : Math.min(this.towers.length, 1 + Math.floor(townSize / 6));
+      if (builtT < allowedT && S.rax.length >= 1 && S.workers.length >= 5) {
         opts.push({ k: 'turret', u: P.fortLove * 0.55 * (1 - builtT / Math.max(1, this.towers.length)) + (recentHit ? 0.4 : 0.05),
           cost: CONFIG.turretCost, go: () => { const ok = this.buildNextTower(); if (ok) S.turrets.push({}); return ok; } });
       }

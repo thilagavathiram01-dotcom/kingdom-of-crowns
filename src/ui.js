@@ -321,7 +321,7 @@ export class HUD {
   onSelect(sel) {
     if (this.elSelCount) this.elSelCount.textContent = sel.length ? `(${sel.length})` : '';
     if (!sel.length) {
-      this.elSel.innerHTML = `<div class="hint">Tap ground to <b>move</b> • tap enemy to <b>attack</b> • tap tree for <b>harvest</b> • pinch to zoom • command your empire to conquer <b>29 rival kingdoms</b></div>`;
+      this.elSel.innerHTML = `<div class="hint">Tap ground to <b>move</b> • tap enemy to <b>attack</b> • tap tree for <b>harvest</b> • pinch to zoom • command your empire to conquer <b>${CONFIG.kingdoms - 1} rival kingdoms</b></div>`;
       this.refreshBuildButtons();
       return;
     }
@@ -886,7 +886,7 @@ export class HUD {
     const alive = this.game.aliveKingdoms().length;
     document.getElementById('game-over-title').textContent = win ? '👑 Crowned!' : 'Defeat';
     document.getElementById('game-over-sub').textContent = win
-      ? `All 29 rival kingdoms have fallen • ${this.fmtTime(time)}`
+      ? `All ${CONFIG.kingdoms - 1} rival kingdoms have fallen • ${this.fmtTime(time)}`
       : `Your kingdom has fallen • ${alive} remain • ${this.fmtTime(time)}`;
     buzz(60);
   }

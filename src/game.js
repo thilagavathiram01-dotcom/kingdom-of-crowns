@@ -422,7 +422,7 @@ export class Game {
     // idle. Chopped trees shrink to stumps and grow back, so logs never run out.
     this.buildForestResources(this.waterFx?.trees || []);
 
-    this.hookMsg(`War of Crowns — ${CONFIG.kingdoms} kingdoms, a ~1 hour saga. Rise in peace, then dominate them all!`);
+    this.hookMsg(`War of Crowns — ${CONFIG.kingdoms} kingdoms. Grow inside your borders, then dominate them all!`);
     this.updateFog();
   }
 
@@ -1603,11 +1603,13 @@ export class Game {
   }
 
   buildingBlocks(b, x, z, pad) {
+    // epsilon-inclusive: cell centers landing exactly on a wall face (grid
+    // alignment depends on map size) must count as blocked, never leak
     if (b.hw === undefined) {
-      const dx = x - b.x, dz = z - b.z, rr = b.radius + pad;
+      const dx = x - b.x, dz = z - b.z, rr = b.radius + pad + 1e-4;
       return dx * dx + dz * dz < rr * rr;
     }
-    return this.footprintDist(b, x, z) < pad;
+    return this.footprintDist(b, x, z) < pad + 1e-4;
   }
 
   // Do two wall boxes share real area? Wall runs are built to butt up against
@@ -3042,17 +3044,19 @@ export class Game {
           if (b.hw !== undefined) {
             // long wall: move to the closest face plus one body radius. The
             // old code used only the push direction, which could park a unit
-            // back inside the wall or beside another unit.
+            // back inside the wall or beside another unit. The +0.05 clears
+            // the inclusive blocking boundary so ejection sticks.
+            const pr = u.radius + 0.05;
             const lx = dx * b.rotC + dz * b.rotS, lz = -dx * b.rotS + dz * b.rotC;
-            const ex = b.hw + u.radius, ez = b.hd + u.radius;
+            const ex = b.hw + pr, ez = b.hd + pr;
             const ox = Math.max(-ex, Math.min(ex, lx));
             const oz = Math.max(-ez, Math.min(ez, lz));
             const px = lx - ox, pz = lz - oz;
             const d = Math.hypot(px, pz);
             let qx, qz;
             if (d > 0.0001) {
-              qx = ox + (px / d) * u.radius;
-              qz = oz + (pz / d) * u.radius;
+              qx = ox + (px / d) * pr;
+              qz = oz + (pz / d) * pr;
             } else if ((ex - Math.abs(lx)) < (ez - Math.abs(lz))) {
               qx = lx >= 0 ? ex : -ex;
               qz = Math.max(-ez, Math.min(ez, lz));
@@ -3068,8 +3072,8 @@ export class Game {
           // cheap reject before sqrt
           if (Math.abs(dx) > rr || Math.abs(dz) > rr) return;
           const d = Math.hypot(dx, dz);
-          if (d < rr && d > 0.0001) { u.x = b.x + (dx / d) * rr; u.z = b.z + (dz / d) * rr; }
-          else if (d <= 0.0001) { u.x = b.x + rr; }
+          if (d < rr && d > 0.0001) { u.x = b.x + (dx / d) * (rr + 0.05); u.z = b.z + (dz / d) * (rr + 0.05); }
+          else if (d <= 0.0001) { u.x = b.x + rr + 0.05; }
         });
       }
       u.x = THREE.MathUtils.clamp(u.x, -H, H);
