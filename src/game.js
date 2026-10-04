@@ -2203,14 +2203,15 @@ export class Game {
   }
 
   nearestResourceLike(x, z, rtype, maxD = 60) {
-    if (rtype === 'tree' && this._resGrid) {
+    if (rtype === 'tree' && this._resGrid && this._resGrid.size) {
       let best = null, bd = maxD;
       this.eachResourceNear(x, z, maxD, (r) => {
         if (r.rtype !== 'tree' || !this.resourceReady(r)) return;
         const d = Math.hypot(r.x - x, r.z - z);
         if (d < bd) { bd = d; best = r; }
       });
-      return best;
+      if (best) return best;
+      // fall through: nodes added after the grid was built (tests, regrow)
     }
     let best = null, bd = maxD;
     for (const r of this.resources) {
@@ -2859,7 +2860,11 @@ export class Game {
           b.x += nx * half; b.z += nz * half;
         }
       } else if (d <= 0.0001) {
-        b.x += 0.15; b.z += 0.1;
+        // degenerate exact stack (spawn pile-up): separate fully along +x in
+        // one deterministic step. Damped pushes handle every other case, but
+        // an exact overlap would otherwise take many passes to unwind.
+        const full = a.radius + b.radius + 0.12;
+        b.x += full; b.z += 0.01;
       }
     };
     // Eject units from building footprints first, then relax unit pairs. The

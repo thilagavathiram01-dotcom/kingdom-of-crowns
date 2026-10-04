@@ -235,17 +235,25 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   const hq = g.spawnBuilding('hq', 'k0', 0, 0);
   const bar = g.spawnBuilding('barracks', 'k0', 14, 0);
   ok('HQ only trains workers', g.canTrain(hq, 'worker') && !g.canTrain(hq, 'brute'));
-  ok('barracks train brute and hunter', g.canTrain(bar, 'brute') && g.canTrain(bar, 'hunter'));
+  ok('barracks trains brute', g.canTrain(bar, 'brute'));
+  ok('hunter moved to the archery', !g.canTrain(bar, 'hunter'));
+  const arc = g.spawnBuilding('archery', 'k0', 24, 0);
+  ok('archery trains hunter', g.canTrain(arc, 'hunter'));
+  ok('hunter locked before Age II', g.trainUnit(arc, 'hunter') === false);
+  g.players.k0.age = 1; // Castle Age unlocks the archery roster
+  ok('hunter unlocked at Age II', g.trainUnit(arc, 'hunter') === true);
+  arc.queue.length = 0; // reset: pricing block below queues fresh
+  g.players.k0.logs = 1000;
   ok('barracks reject unknown units', !g.canTrain(bar, 'dragon'));
   ok('brute costs its config price', g.unitCost('brute') === CONFIG.bruteCost);
   ok('hunter costs its config price', g.unitCost('hunter') === CONFIG.hunterCost);
   const before = g.players.k0.logs;
   ok('queueing a brute succeeds', g.trainUnit(bar, 'brute'));
-  ok('queueing a hunter succeeds', g.trainUnit(bar, 'hunter'));
+  ok('queueing a hunter succeeds', g.trainUnit(arc, 'hunter'));
   ok('troop prices come out of the treasury',
     g.players.k0.logs === before - CONFIG.bruteCost - CONFIG.hunterCost, `logs=${g.players.k0.logs}`);
-  ok('the queue keeps both orders', bar.queue.length === 2 && bar.queue[0].type === 'brute' && bar.queue[1].type === 'hunter');
-  ok('queue times come from config', bar.queue[0].t === CONFIG.trainTime.brute && bar.queue[1].t === CONFIG.trainTime.hunter);
+  ok('the queue keeps both orders', bar.queue.length === 1 && arc.queue.length === 1 && bar.queue[0].type === 'brute' && arc.queue[0].type === 'hunter');
+  ok('queue times come from config', bar.queue[0].t === CONFIG.trainTime.brute && arc.queue[0].t === CONFIG.trainTime.hunter);
   ok('a broke kingdom cannot queue', (g.players.k0.logs = 0, g.trainUnit(bar, 'brute') === false));
 
   // both new units are real, shootable units
