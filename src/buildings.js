@@ -1,4 +1,4 @@
-import { BUILD_DEFS, PLACEMENT } from './config.js';
+import { BUILD_DEFS, PLACEMENT, HQ_LEVELS, WALL_CHAIN_DIST } from './config.js';
 
 // README-2 § Placement + § Buildings.
 // canPlace returns null when valid, otherwise a reason string.
@@ -65,7 +65,7 @@ export function canPlaceFor(game, owner, type, x, z, rot = 0) {
   }
   const frontier = type === 'barracks' || type === 'tower';
   const radius = frontier ? PLACEMENT.frontierRadius : PLACEMENT.territoryRadius;
-  if (!inTerritory(game, x, z, radius, owner)) return 'out of territory';
+  if (!inTerritory(game, x, z, radius, owner)) return 'out of territory — build inside your HQ radius (upgrade HQ to expand it)';
   const need = needsNearby(type);
   if (need && game.nearestResourceLike && !game.nearestResourceLike(x, z, need.rtype, need.radius)) {
     return `needs ${need.label} nearby`;
@@ -76,15 +76,35 @@ export function canPlaceFor(game, owner, type, x, z, rot = 0) {
   return null;
 }
 
+// HQ territory: a point is inside your land if it falls in ANY living HQ
+// radius you own. Radius grows with HQ level (upgrade HQ to push the border).
+// Walls may also chain outward from your existing walls so bridge forts work.
+export function hqRadiusOf(building) {
+  const lv = Math.min(Math.max(building?.level || 1, 1), HQ_LEVELS.length);
+  return HQ_LEVELS[lv - 1].radius;
+}
+
+export function inHqTerritory(game, owner, x, z, extra = 0) {
+  for (const b of game.buildings) {
+    if (b.dead || b.owner !== owner || b.type !== 'hq') continue;
+    if (Math.hypot(b.x - x, b.z - z) <= hqRadiusOf(b) + extra) return b;
+  }
+  return null;
+}
+
 export function inTerritory(game, x, z, radius, owner) {
+  // legacy signature kept: radius param acts as a minimum floor, but the real
+  // rule is HQ levels. Walls chain from owned walls.
+  if (inHqTerritory(game, owner, x, z, 0)) return true;
+  // wall chaining: within WALL_CHAIN_DIST of another owned wall/tower
   for (const b of game.buildings) {
     if (b.dead || b.owner !== owner) continue;
-    if (b.type !== 'hq' && b.type !== 'tower' && b.type !== 'turret') continue;
-    if (Math.hypot(b.x - x, b.z - z) <= radius) return true;
+    if (b.type !== 'wall' && b.type !== 'tower' && b.type !== 'turret') continue;
+    if (Math.hypot(b.x - x, b.z - z) <= WALL_CHAIN_DIST) return true;
   }
   // no anchor yet (first HQ) — allow
-  const anyAnchor = game.buildings.some((b) => !b.dead && b.owner === owner && (b.type === 'hq'));
-  if (!anyAnchor) return true;
+  const anyHq = game.buildings.some((b) => !b.dead && b.owner === owner && b.type === 'hq');
+  if (!anyHq) return true;
   return false;
 }
 

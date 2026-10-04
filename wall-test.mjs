@@ -2,7 +2,7 @@
 // oriented-box collision, cheap walls, starter keeps and caveman troop stats.
 import * as THREE from 'three';
 import { readFileSync } from 'fs';
-import { CONFIG } from './src/config.js';
+import { CONFIG, HQ_LEVELS, NEW_HQ_COST, MAX_HQ_PER_KINGDOM } from './src/config.js';
 import { Game } from './src/game.js';
 import { KingdomBrain } from './src/ai.js';
 
@@ -537,6 +537,35 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
     if (!maskOk) maskDetail = `${w}x${h} ${d.length}B`;
   } catch (e) { maskDetail = 'unreadable'; }
   ok('roof team mask ships at atlas size', maskOk, maskDetail);
+}
+
+// ---------- 18. HQ territory radius + upgrades + multi-HQ survival ----------
+{
+  const g = fakeGame();
+  g.spawnPing = () => {};
+  const hq = g.spawnBuilding('hq', 'k0', 0, 0);
+  ok('HQ starts at level 1', hq.level === 1);
+  ok('level-1 territory is wide', g.hqRadiusOf(hq) === HQ_LEVELS[0].radius && HQ_LEVELS[0].radius >= 70);
+  const { canPlaceFor } = await import('./src/buildings.js');
+  ok('inside HQ radius is buildable', canPlaceFor(g, 'k0', 'house', 20, 0) === null);
+  ok('outside HQ radius is rejected', typeof canPlaceFor(g, 'k0', 'house', 120, 0) === 'string');
+  ok('new town chains inside land', canPlaceFor(g, 'k0', 'hq', 40, 0) === null);
+  ok('new town cannot leap outside land', typeof canPlaceFor(g, 'k0', 'hq', 150, 0) === 'string');
+  // upgrade: pay, grow radius + supply
+  g.players.k0.wood = 2000; g.players.k0.food = 2000; g.players.k0.logs = 2000;
+  const r0 = g.hqRadiusOf(hq), s0 = g.supplyMax('k0');
+  ok('HQ upgrade succeeds when affordable', g.upgradeHQ(hq) === true && hq.level === 2);
+  ok('upgrade widens territory', g.hqRadiusOf(hq) > r0);
+  ok('upgrade raises supply', g.supplyMax('k0') > s0);
+  // multi-HQ: losing one town does not kill the kingdom
+  const hq2 = g.spawnBuilding('hq', 'k0', 40, 0);
+  hq2.level = 1;
+  g.damage(hq, 1e9, 'k9');
+  ok('kingdom survives its first HQ loss', g.players.k0.alive !== false && g.hqCount('k0') === 1);
+  g.damage(hq2, 1e9, 'k9');
+  ok('last HQ loss ends the kingdom', g.players.k0.alive === false);
+  ok('town cap is 3', MAX_HQ_PER_KINGDOM === 3);
+  void NEW_HQ_COST;
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, COLORS, kingdomColor, kingdomName, BUILD_REQUIRES, UNIT_REQUIRES, BUILD_DEFS, UNIT_DEFS, TRAIN_AGE, AGE_NAMES } from './config.js';
+import { CONFIG, COLORS, kingdomColor, kingdomName, BUILD_REQUIRES, UNIT_REQUIRES, BUILD_DEFS, UNIT_DEFS, TRAIN_AGE, AGE_NAMES, HQ_LEVELS, NEW_HQ_COST, MAX_HQ_PER_KINGDOM } from './config.js';
 import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite } from './terrain.js';
 import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE, createAdventurerRig, ADVENTURER_SCALE } from './workers3d.js';
 import { buildingModel } from './buildings3d.js';
@@ -687,6 +687,7 @@ export class Game {
     };
     if (type === 'mill' && !b.workers) b.workers = [];
     if (type === 'farm' && b.grain === undefined) b.grain = 0;
+    if (type === 'hq') { b.level = 1; this.refreshTerritoryRing(b); }
     this.resetRally(b);
     this.buildings.push(b);
     this.colliderVersion++;
@@ -1313,7 +1314,7 @@ export class Game {
     if (u.hFor !== n.id) {
       const k = (u.id || 0) % 6;
       const a = (k / 6) * Math.PI * 2 + (n.id % 7) * 0.35;
-      const r = (n.radius || 1.4) + 1.1;
+      const r = (n.radius || 1.4) + 1.6; // elbow room: 6 hands around a node
       u.hFor = n.id;
       u.hx = n.x + Math.cos(a) * r;
       u.hz = n.z + Math.sin(a) * r;
@@ -1643,7 +1644,7 @@ export class Game {
     // age gate first: locked buildings never enter placement (toast explains)
     const lock = this.buildingLock ? this.buildingLock(this.humanId, type) : null;
     if (lock) { this.hookMsg(`🔒 ${lock}`); return; }
-    const pretty = { turret: 'Defense Turret', tower: 'Watchtower', wall: 'Wall', hq: 'HQ', mill: 'Mill', farm: 'Farm', house: 'House', lumber: 'Lumber Camp', quarry: 'Quarry', depot: 'Crystal Depot', barracks: 'Barracks', archery: 'Archery Range', stable: 'Stable', siege: 'Siege Workshop', smith: 'Blacksmith', temple: 'Temple', market: 'Market', embassy: 'Embassy', wonder: 'Crown Hall (Wonder)' };
+    const pretty = { turret: 'Defense Turret', tower: 'Watchtower', wall: 'Wall', hq: 'New Town (HQ)', mill: 'Mill', farm: 'Farm', house: 'House', lumber: 'Lumber Camp', quarry: 'Quarry', depot: 'Crystal Depot', barracks: 'Barracks', archery: 'Archery Range', stable: 'Stable', siege: 'Siege Workshop', smith: 'Blacksmith', temple: 'Temple', market: 'Market', embassy: 'Embassy', wonder: 'Crown Hall (Wonder)' };
     const name = pretty[type] || (type[0].toUpperCase() + type.slice(1));
     if (!this.canAffordRes(this.humanId, costRes)) { this.hookMsg(`Need ${costN} resources for ${name}`); return; }
     const st = CONFIG.buildings[type] || { size: 3.4 };
@@ -1962,9 +1963,58 @@ export class Game {
     let m = 0;
     for (const b of this.buildings) {
       if (b.owner !== owner || b.dead) continue;
-      m += b.type === 'hq' ? CONFIG.supplyPerHQ : b.type === 'barracks' ? CONFIG.supplyPerBarracks : b.type === 'house' ? (CONFIG.supplyPerHouse ?? 5) : 0;
+      if (b.type === 'hq') m += HQ_LEVELS[Math.min(b.level || 1, HQ_LEVELS.length) - 1].supply;
+      else m += b.type === 'barracks' ? CONFIG.supplyPerBarracks : b.type === 'house' ? (CONFIG.supplyPerHouse ?? 5) : 0;
     }
     return m;
+  }
+
+  hqRadiusOf(b) {
+    return HQ_LEVELS[Math.min(b.level || 1, HQ_LEVELS.length) - 1].radius;
+  }
+
+  hqCount(owner) {
+    let n = 0;
+    for (const b of this.buildings) if (!b.dead && b.owner === owner && b.type === 'hq') n++;
+    return n;
+  }
+
+  upgradeHQ(hq) {
+    if (!hq || hq.dead || hq.type !== 'hq') return false;
+    const next = Math.min((hq.level || 1) + 1, HQ_LEVELS.length);
+    if (next === (hq.level || 1)) {
+      if (hq.owner === this.humanId) this.hookMsg('HQ already at max level');
+      return false;
+    }
+    const cost = HQ_LEVELS[next - 1].cost;
+    if (!this.canAffordRes(hq.owner, cost)) {
+      if (hq.owner === this.humanId) this.hookMsg(`Need ${cost.wood}🪵 ${cost.food}🌾 to upgrade HQ`);
+      return false;
+    }
+    this.payRes(hq.owner, cost);
+    hq.level = next;
+    hq.maxHp = Math.round(hq.maxHp * 1.35); hq.hp = Math.min(hq.maxHp, hq.hp + hq.maxHp * 0.35);
+    this.refreshTerritoryRing(hq);
+    this.hookMsg(`🏰 ${this.players[hq.owner]?.name} HQ → Level ${next}! Territory ${this.hqRadiusOf(hq)}m, +supply`);
+    return true;
+  }
+
+  // translucent team-color territory disc for an HQ (rebuilt on upgrade)
+  refreshTerritoryRing(hq) {
+    try {
+      if (hq.terrRing) { hq.mesh.remove(hq.terrRing); hq.terrRing = null; }
+      const r = this.hqRadiusOf(hq);
+      const g = new THREE.Group();
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(r, 48),
+        new THREE.MeshBasicMaterial({ color: this.teamColor(hq.owner), transparent: true, opacity: 0.07, depthWrite: false }));
+      disc.rotation.x = -Math.PI / 2; disc.position.y = 0.05;
+      const edge = new THREE.Mesh(new THREE.RingGeometry(r - 0.8, r, 64),
+        new THREE.MeshBasicMaterial({ color: this.teamColor(hq.owner), transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }));
+      edge.rotation.x = -Math.PI / 2; edge.position.y = 0.06;
+      g.add(disc, edge);
+      hq.mesh.add(g);
+      hq.terrRing = g;
+    } catch { /* headless */ }
   }
 
   buildingCost(type) {
@@ -1990,6 +2040,7 @@ export class Game {
       tower: { wood: 120 }, turret: { wood: 120 },
       wall: { wood: 5 }, market: { wood: 150, food: 50 },
       embassy: { wood: 100, food: 50 }, wonder: { wood: 1500, food: 1000 },
+      hq: { ...NEW_HQ_COST },
     };
     if (table[type]) return table[type];
     return { wood: this.buildingCost(type) };
@@ -2477,6 +2528,15 @@ export class Game {
             const goalX = u.harvestTarget ? (u.hx ?? u.harvestTarget.x) : (u.pathTx ?? u.tx ?? u.x);
             const goalZ = u.harvestTarget ? (u.hz ?? u.harvestTarget.z) : (u.pathTz ?? u.tz ?? u.z);
             u.stuckT = 0; u.path = null; u.repathT = 0;
+            u.stuckN = (u.stuckN || 0) + 1;
+            if (u.stuckN >= 3) {
+              // wedged hard (boxed by buildings/units): relocate to free
+              // ground beside the goal instead of shuffling forever
+              const s = this.findFreeSpot(goalX + 2, goalZ + 2, u.radius + 0.3, u)
+                || this.findFreeSpot(goalX - 2, goalZ - 2, u.radius + 0.3, u);
+              if (s) { u.x = s.x; u.z = s.z; }
+              u.stuckN = 0;
+            } else {
             // small sidestep perpendicular to travel dir; never into a wall.
             // Nearby units are ignored here because resolveOverlaps separates
             // them after the teleport.
@@ -2488,8 +2548,9 @@ export class Game {
               return false;
             };
             if (!tryStep(a, 0.5)) tryStep(a + Math.PI, 0.5);
+            }
           }
-        } else u.stuckT = 0;
+        } else { u.stuckT = 0; u.stuckN = 0; }
       } else {
         u.stuckT = 0;
       }
@@ -3402,6 +3463,12 @@ export class Game {
   }
 
   onKingdomFallen(owner) {
+    // multi-HQ kingdoms survive losing one town — only the last HQ kills
+    const left = this.hqCount(owner);
+    if (left > 0) {
+      this.hookMsg(`🔥 ${this.players[owner]?.name} lost an HQ — ${left} town${left === 1 ? '' : 's'} stand${left === 1 ? 's' : ''}!`);
+      return;
+    }
     const p = this.players[owner];
     if (p) p.alive = false;
     if (!this.isHuman(owner)) {

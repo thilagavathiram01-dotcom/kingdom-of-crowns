@@ -124,6 +124,17 @@ export const UPKEEP = { workerFood: 0.015, soldierFood: 0.035 }; // food consume
 
 export const PLACEMENT = { maxSlopeDeg: 18, territoryRadius: 65, frontierRadius: 95, grid: 4 };
 
+// HQ territory: every building must stand inside one of your HQ radii.
+// Upgrade the HQ to push the border out; new HQs chain inside existing land.
+export const HQ_LEVELS = [
+  { level: 1, radius: 70, supply: 26, cost: null },
+  { level: 2, radius: 95, supply: 34, cost: { wood: 400, food: 300 } },
+  { level: 3, radius: 125, supply: 44, cost: { wood: 800, food: 600 } },
+];
+export const NEW_HQ_COST = { wood: 800, food: 500 };
+export const MAX_HQ_PER_KINGDOM = 3;
+export const WALL_CHAIN_DIST = 30; // walls may extend this far past owned walls
+
 export const WAR = {
   checkEverySec: 10,
   minFort: 0.7,

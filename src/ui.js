@@ -1,4 +1,4 @@
-import { CONFIG, BUILD_DEFS, UNIT_DEFS, AGES, AGE_NAMES } from './config.js';
+import { CONFIG, BUILD_DEFS, UNIT_DEFS, AGES, AGE_NAMES, HQ_LEVELS, NEW_HQ_COST, MAX_HQ_PER_KINGDOM } from './config.js';
 import { icon } from './icons.js';
 
 const UNIT_META = {
@@ -590,8 +590,26 @@ export class HUD {
 
       if (single.type === 'hq') {
         this.elBuild.appendChild(rallyHint);
+        // territory + town level
+        const lv = single.level || 1;
+        const terrHint = document.createElement('div');
+        terrHint.className = 'side-hint';
+        terrHint.textContent = `Town Lv ${lv} · Territory ${g.hqRadiusOf ? g.hqRadiusOf(single) : 70}m — all buildings must stand inside your HQ circles`;
+        this.elBuild.appendChild(terrHint);
         ap(this.trainBtn(single, 'worker'));
         ap(this.trainBtn(single, 'scout'));
+        // HQ upgrade → bigger territory + supply
+        {
+          const next = (typeof HQ_LEVELS !== 'undefined' ? HQ_LEVELS : [])[lv];
+          if (next && next.cost) {
+            ap(this.actBtn('home', `Upgrade HQ → Lv ${next.level}`, `Territory ${next.radius}m, +supply (${next.cost.wood}🪵 ${next.cost.food}🌾)`, () => {
+              g.upgradeHQ?.(single);
+              this.onSelect(g.selected);
+            }));
+          }
+        }
+        // Found a new town inside current territory (max 3 towns)
+        ap(this.actBtn('flag', 'Found New Town', 'New HQ inside your territory (800🪵 500🌾) — expands your borders', () => g.startPlacement('hq')));
         // Heroes
         for (const t of ['hero_king', 'hero_champion', 'hero_archmage']) {
           ap(this.trainBtn(single, t));

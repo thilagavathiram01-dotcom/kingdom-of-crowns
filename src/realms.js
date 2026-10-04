@@ -5,6 +5,7 @@ import { WorldEvents } from './events.js';
 import { Diplomacy } from './diplomacy.js';
 import { quickSave, quickLoad } from './save.js';
 import { canPlaceFor, costOf, canAfford, payCost } from './buildings.js';
+import { NEW_HQ_COST, MAX_HQ_PER_KINGDOM, HQ_LEVELS } from './config.js';
 
 // README-2 integration layer: registers harvestable rocks/crystals,
 // pickups, villages and caravans; runs the food chain, upkeep, ages,
@@ -24,6 +25,8 @@ export function installRealms(game, ai) {
   game.realms = R;
   game.diplomacy = R.diplomacy;
   game.worldEvents = R.events;
+  // AI brain lookup for ambition scaling (kingdom id -> KingdomBrain)
+  game._brainOf = (kid) => ai?.byOwner?.get(kid) || null;
   game.realmPlacementValid = (type, x, z) => !canPlaceFor(game, game.humanId, type, x, z);
   game.realmPlacementReason = (type, x, z) => canPlaceFor(game, game.humanId, type, x, z) || null;
   game.worldToScreen = (x, z) => {
@@ -59,7 +62,15 @@ export function installRealms(game, ai) {
 
   // ---- generic construction for every README-2 building ----
   game.constructBuilding = (owner, type, x, z) => {
-    const cost = costOf(type);
+    let cost = costOf(type);
+    if (type === 'hq') {
+      // founding a new town: full price + kingdom town cap
+      if (game.hqCount(owner) >= MAX_HQ_PER_KINGDOM) {
+        if (owner === game.humanId) game.hookMsg(`Town limit reached (${MAX_HQ_PER_KINGDOM}) — upgrade your HQs instead`);
+        return null;
+      }
+      if (game.hqCount(owner) >= 1) cost = { ...NEW_HQ_COST };
+    }
     const st = game.players[owner];
     if (!canAfford(st, cost)) {
       if (owner === game.humanId) game.hookMsg(`Need ${fmtCost(cost)} for ${BUILD_DEFS[type]?.name || type}`);
@@ -262,47 +273,137 @@ function tickAIEconomy(game, R, dt) {
 function aiEconomyFor(game, id) {
   const hq = game.hqOf(id);
   if (!hq) return;
-  const count = (t) => game.buildings.filter((b) => !b.dead && b.owner === id && b.type === t).length;
   const st = game.players[id];
+  const age = st.age || 0;
+  const count = (t) => game.buildings.filter((b) => !b.dead && b.owner === id && b.type === t).length;
   const tryBuild = (type, x, z) => {
-    if (!canAfford(st, costOf(type))) return;
-    if (canPlaceFor(game, id, type, x, z)) return; // invalid → skip quietly
+    if (game.buildingLock?.(id, type)) return false; // age/prereq locked
+    if (!canAfford(st, costOf(type))) return false;
+    if (canPlaceFor(game, id, type, x, z)) return false; // invalid → skip quietly
     payCost(st, costOf(type));
     const b = game.spawnBuilding(type, id, x, z);
     if (type === 'farm') b.grain = 0;
     if (type === 'mill') b.workers = [];
+    return true;
   };
-  const free = (x, z, r) => {
-    const s = game.findFreeSpot(x, z, r);
-    return s;
+  // sample buildable spots on a ring around (cx,cz) at ~dist, inside territory
+  const spotFor = (type, cx, cz, dist, r) => {
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2 + (id.charCodeAt(1) || 0);
+      const dd = dist * (0.7 + (i % 3) * 0.3);
+      const x = cx + Math.cos(a) * dd, z = cz + Math.sin(a) * dd;
+      const s = game.findFreeSpot(x, z, r);
+      if (!s) continue;
+      if (canPlaceFor(game, id, type, s.x, s.z)) continue; // out of land → next
+      return s;
+    }
+    return null;
   };
-  // 1. houses behind the keep (away from nearest enemy)
-  if (count('house') < 3 && game.time > 60) {
+  const buildOne = (type, want, cx, cz, dist, r) => {
+    if (count(type) >= want) return false;
+    const s = spotFor(type, cx, cz, dist, r);
+    if (!s) return false;
+    return tryBuild(type, s.x, s.z);
+  };
+  const armyN = game.units.filter((u) => !u.dead && u.owner === id && u.type !== 'worker').length;
+  const workerN = game.units.filter((u) => !u.dead && u.owner === id && u.type === 'worker').length;
+  const supplyMax = game.supplyMax(id);
+  const supplyUsed = armyN + workerN;
+
+  // scale ambition with age + time (the brain's army/harvest targets grow too)
+  const brain = game._brainOf?.(id);
+  if (brain?.P) {
+    if (brain.P.baseWant === undefined) { brain.P.baseWant = brain.P.wantArmy; brain.P.baseWorkers = brain.P.targetWorkers; }
+    brain.P.wantArmy = Math.min(40, brain.P.baseWant + age * 5 + Math.floor(game.time / 150));
+    brain.P.targetWorkers = Math.min(16, brain.P.baseWorkers + age * 2);
+  }
+
+  // 1. supply: houses just behind the keep when capped (one per tick)
+  if (supplyUsed >= supplyMax - 2 && game.time > 50) {
     const foe = nearestFoeHq(game, id);
     const dx = foe ? hq.x - foe.x : 10, dz = foe ? hq.z - foe.z : 10;
     const d = Math.hypot(dx, dz) || 1;
-    const s = free(hq.x + (dx / d) * 14, hq.z + (dz / d) * 14, 2);
-    if (s) tryBuild('house', s.x, s.z);
+    const s = game.findFreeSpot(hq.x + (dx / d) * 16, hq.z + (dz / d) * 16, 2);
+    if (s && tryBuild('house', s.x, s.z)) return;
   }
-  // 2. mill + farm ring (core food chain)
-  if (count('mill') < 1 && game.time > 90) {
-    const s = free(hq.x + 12, hq.z + 6, 2.5);
-    if (s) tryBuild('mill', s.x, s.z);
+  // 2. food core: first mill + farm ring, second mill later
+  const wantMills = game.time > 480 ? 2 : 1;
+  if (count('mill') < wantMills && game.time > 90) {
+    if (buildOne('mill', wantMills, hq.x, hq.z, 14, 2.5)) return;
   }
   const mills = game.buildings.filter((b) => !b.dead && b.owner === id && b.type === 'mill');
-  if (mills.length && count('farm') < 4) {
-    const m = mills[0];
-    for (let i = 0; i < 4; i++) {
-      if (count('farm') >= 4) break;
-      const a = (i / 4) * Math.PI * 2 + 0.4;
-      const s = free(m.x + Math.cos(a) * 12, m.z + Math.sin(a) * 12, 2.5);
-      if (s) tryBuild('farm', s.x, s.z);
+  if (mills.length && count('farm') < mills.length * 3 && game.time > 120) {
+    const m = mills[count('farm') % mills.length];
+    if (buildOne('farm', mills.length * 3, m.x, m.z, 12, 2.5)) return;
+  }
+  // 3. wood: lumber camp toward the nearest forest, inside our land
+  if (count('lumber') < (game.time > 420 ? 2 : 1) && game.time > 100) {
+    const tree = game.nearestResourceLike?.(hq.x, hq.z, 'tree', 200);
+    if (tree) {
+      // anchor between HQ and forest, clamped inside territory
+      const dx = tree.x - hq.x, dz = tree.z - hq.z, d = Math.hypot(dx, dz) || 1;
+      const R = game.hqRadiusOf ? game.hqRadiusOf(hq) : 70;
+      const dd = Math.min(d - 6, R - 8);
+      if (dd > 6) {
+        const s = game.findFreeSpot(hq.x + (dx / d) * dd, hq.z + (dz / d) * dd, 2);
+        if (s && tryBuild('lumber', s.x, s.z)) return;
+      }
     }
   }
-  // 3. market + embassy in age III towns
-  if ((st.age || 0) >= 2 && count('market') < 1 && game.time > 600) {
-    const s = free(hq.x - 12, hq.z + 8, 2.5);
-    if (s) tryBuild('market', s.x, s.z);
+  // 4. military + tech by age (one per tick, in dependency order)
+  const milPlan = [
+    ['archery', 1], ['smith', 1], ['stable', 1], ['tower', 2],
+    ['temple', 1], ['siege', 1], ['market', 1], ['embassy', 1],
+  ];
+  for (const [t, want] of milPlan) {
+    if (count(t) >= want) continue;
+    if (game.buildingLock?.(id, t)) continue;
+    if (!canAfford(st, costOf(t))) continue;
+    // towers lean toward the enemy side of town
+    let cx = hq.x, cz = hq.z;
+    if (t === 'tower') {
+      const foe = nearestFoeHq(game, id);
+      if (foe) { const dx = foe.x - hq.x, dz = foe.z - hq.z, d = Math.hypot(dx, dz) || 1; cx = hq.x + (dx / d) * 30; cz = hq.z + (dz / d) * 30; }
+    }
+    if (buildOne(t, want, cx, cz, t === 'tower' ? 12 : 18, 2.5)) return;
+  }
+  // 5. HQ upgrade → bigger territory + supply (priority once basics exist)
+  if (count('mill') >= 1 && count('farm') >= 2) {
+    for (const h of game.buildings) {
+      if (h.dead || h.owner !== id || h.type !== 'hq') continue;
+      if ((h.level || 1) >= 3) continue;
+      const cost = HQ_LEVELS[h.level || 1]?.cost; // next level entry
+      if (cost && canAfford(st, cost)) {
+        if (game.upgradeHQ(h)) return;
+      }
+      break; // one upgrade per tick max
+    }
+  }
+  // 6. age up when the town can carry it
+  if (game.time > 300 && (st.age || 0) < 3) {
+    const ages = [{}, { food: 250, wood: 200 }, { food: 500, wood: 400 }, { food: 900, wood: 800 }];
+    const cost = ages[(st.age || 0) + 1];
+    if (cost && canAfford(st, cost) && count('barracks') >= 1 && workerN >= 8) {
+      if (game.ageUp?.(id)) return;
+    }
+  }
+  // 7. territory expansion: found a forward town toward the foe (chains land)
+  if (game.time > 720 && game.hqCount(id) < MAX_HQ_PER_KINGDOM && count('barracks') >= 2 && armyN >= 12) {
+    const foe = nearestFoeHq(game, id);
+    if (foe) {
+      const dx = foe.x - hq.x, dz = foe.z - hq.z, d = Math.hypot(dx, dz) || 1;
+      const R = game.hqRadiusOf ? game.hqRadiusOf(hq) : 70;
+      // inside our own radius (chain rule) but leaning at the enemy
+      const dd = R * 0.62;
+      const s = game.findFreeSpot(hq.x + (dx / d) * dd, hq.z + (dz / d) * dd, 4);
+      if (s && canAfford(st, NEW_HQ_COST) && !canPlaceFor(game, id, 'hq', s.x, s.z)) {
+        payCost(st, NEW_HQ_COST);
+        const b2 = game.spawnBuilding('hq', id, s.x, s.z);
+        b2.level = 1; game.refreshTerritoryRing?.(b2);
+        game.hookMsg?.(`🏰 ${st.name} founded a new town!`);
+        return;
+      }
+    }
   }
 }
 
