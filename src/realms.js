@@ -25,6 +25,7 @@ export function installRealms(game, ai) {
   game.diplomacy = R.diplomacy;
   game.worldEvents = R.events;
   game.realmPlacementValid = (type, x, z) => !canPlaceFor(game, game.humanId, type, x, z);
+  game.realmPlacementReason = (type, x, z) => canPlaceFor(game, game.humanId, type, x, z) || null;
   game.worldToScreen = (x, z) => {
     try {
       const v = new THREE.Vector3(x, game.gy(x, z) + 2, z).project(game.camera);
@@ -146,7 +147,11 @@ function realmTick(game, R, dt) {
       b.workers.forEach((w, i) => {
         const a = (i / 4) * Math.PI * 2;
         const px = b.x + Math.cos(a) * 2.5, pz = b.z + Math.sin(a) * 2.5;
-        if (Math.hypot(w.x - px, w.z - pz) > 1.2 && !w.target) {
+        const d = Math.hypot(w.x - px, w.z - pz);
+        if (d <= 2.5) {
+          // on station: plant feet, stop micro-walking (no jitter)
+          w.hasOrder = false; w.path = null; w.tx = w.x; w.tz = w.z;
+        } else if (!w.target) {
           w.tx = px; w.tz = pz; w.hasOrder = true; w.path = null;
         }
       });

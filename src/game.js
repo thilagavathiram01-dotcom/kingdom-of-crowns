@@ -674,6 +674,12 @@ export class Game {
     bar.position.y = barY;
     g.add(bar);
     const ring = this.addSelectionRing(g, s * 0.75 + 0.4, COLORS.select);
+    // team underglow: every kingdom's buildings glow in its own colour,
+    // so rival bases read as different kingdoms at a glance
+    const glow = new THREE.Mesh(new THREE.CircleGeometry(s * 0.72, 28),
+      new THREE.MeshBasicMaterial({ color: this.teamColor(owner), transparent: true, opacity: 0.28 }));
+    glow.rotation.x = -Math.PI / 2; glow.position.y = 0.06;
+    g.add(glow);
     this.scene.add(g);
     const b = {
       id: UID++, kind: 'building', type, owner, mesh: g, ring, bar, flag,
@@ -1626,7 +1632,11 @@ export class Game {
     const pl = this.placement;
     if (!pl) return;
     this.updateGhost(x, z);
-    if (!pl.valid) { this.hookMsg('Cannot build here — slope / water / territory / needs nearby resource'); return; }
+    if (!pl.valid) {
+      const why = this.realmPlacementReason?.(pl.type, pl.x, pl.z) || 'slope / water / territory / blocked';
+      this.hookMsg(`Cannot build here — ${why}`);
+      return;
+    }
     let b = null;
     if (pl.type === 'turret') b = this.buildTurret(this.humanId, pl.x, pl.z);
     else if (pl.type === 'wall') b = this.buildWall(this.humanId, pl.x, pl.z, pl.rot);
@@ -2270,14 +2280,19 @@ export class Game {
       this.updateUnit(u, dt);
       // sampled before lastX/lastZ roll over: the rig needs real frame movement
       const moved = Math.hypot(u.x - u.lastX, u.z - u.lastZ);
-      // unstick: barely moved while path-following -> drop cache, repath, tiny sidestep.
-      // Anchored (firing) units are exempt — they are SUPPOSED to stand still.
-      const followingPath = (u.hasOrder || u.target) && u.path && u.path.length && !u.fireAnchor;
-      if (followingPath) {
-        if (Math.hypot(u.x - u.lastX, u.z - u.lastZ) < u.speed * dt * 0.2) {
+      // unstick: barely moved while trying to get somewhere -> drop cache,
+      // repath, tiny sidestep. Anchored (firing) units are exempt — they are
+      // SUPPOSED to stand still. Harvest/mill duty counts too: a worker wedged
+      // behind a tree or another worker must shuffle free, not idle forever.
+      const wantsMove = (u.hasOrder || u.target || (u.harvestTarget && !u.returning)) && !u.fireAnchor && !u.holdPosition;
+      const followingPath = (u.hasOrder || u.target) && u.path && u.path.length;
+      if (wantsMove && !u.fireAnchor) {
+        if (moved < Math.min(u.speed, u.moveCap || u.speed) * dt * 0.2) {
           u.stuckT += dt;
-          if (u.stuckT > 0.7) {
-            const goalX = u.pathTx ?? u.tx ?? u.x, goalZ = u.pathTz ?? u.tz ?? u.z;
+          const limit = followingPath ? 0.7 : 1.2;
+          if (u.stuckT > limit) {
+            const goalX = u.harvestTarget && !u.hasOrder ? u.harvestTarget.x : (u.pathTx ?? u.tx ?? u.x);
+            const goalZ = u.harvestTarget && !u.hasOrder ? u.harvestTarget.z : (u.pathTz ?? u.tz ?? u.z);
             u.stuckT = 0; u.path = null; u.repathT = 0;
             // sidestep perpendicular to travel dir; never into a wall. Nearby
             // units are ignored here because resolveOverlaps separates them
@@ -2430,7 +2445,7 @@ export class Game {
     const CARRY = carryOf(u);
     if (u.type === 'worker' && u.harvestTarget && this.resourceReady(u.harvestTarget) && u.carrying < CARRY) {
       const n = u.harvestTarget;
-      if (Math.hypot(n.x - u.x, n.z - u.z) > n.radius + 0.9) { this.navigate(u, n.x, n.z, dt, n.radius + 0.9, 3.0); return; }
+      if (Math.hypot(n.x - u.x, n.z - u.z) > n.radius + 1.6) { this.navigate(u, n.x, n.z, dt, n.radius + 1.6, 3.0); return; }
       u.path = null;
       u.gathering += dt;
       if (u.gathering >= CONFIG.units.worker.harvestTime) {
@@ -2443,14 +2458,24 @@ export class Game {
         this.burst(n.x, this.gy(n.x, n.z) + 2.4, n.z, 0x4ade80, 4, 2);
         if (n.amount <= 0) {
           // chopped down -> stump, regrows after a while (never permanently gone).
-          // Manual order complete: haul home what is carried, then idle.
           n.amount = 0;
           n.depleted = true;
-          const [rlo, rhi] = CONFIG.resource?.regrowTime ?? [55, 115];
-          n.regrowT = rlo + Math.random() * (rhi - rlo);
-          this.syncTree(n);
+          if (n.rtype === 'rock') this.syncRock?.(n);
+          else {
+            const [rlo, rhi] = CONFIG.resource?.regrowTime ?? [55, 115];
+            n.regrowT = rlo + Math.random() * (rhi - rlo);
+            this.syncTree(n);
+          }
           u.harvestTarget = null; u.harvestManual = false;
           u.hasOrder = u.carrying > 0; u.returning = u.carrying > 0;
+          // node gone and hands empty: move straight to the next same-kind node
+          if (!u.carrying && !u.assignedMill && !u.holdPosition) {
+            const next = this.nearestResourceLike?.(u.x, u.z, n.rtype || 'tree', 90) || this.nearestResource(u.x, u.z);
+            if (next && next !== n && this.resourceReady(next)) {
+              u.harvestTarget = next; u.harvestManual = true; u.gathering = 0;
+              u.hasOrder = true; u.path = null;
+            }
+          }
         }
         if (u.carrying >= CARRY) { const hq = this.hqOf(u.owner); if (hq) { const drop = this.hqDropSpot(hq, u); u.returning = true; u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id; u.tx = drop.x; u.tz = drop.z; u.path = null; } }
       }
@@ -2467,7 +2492,7 @@ export class Game {
       }
       // The staged drop sits just outside the HQ footprint, past the old
       // center-distance deposit ring — so hand over on drop arrival too.
-      const atDrop = u.dropX !== undefined && Math.hypot(u.dropX - u.x, u.dropZ - u.z) <= 0.85;
+      const atDrop = u.dropX !== undefined && Math.hypot(u.dropX - u.x, u.dropZ - u.z) <= 1.2;
       if (Math.hypot(hq.x - u.x, hq.z - u.z) > hq.radius + 0.9 && !atDrop) { this.navigate(u, u.dropX, u.dropZ, dt, 0.8, 3.0); return; }
       u.path = null;
       const pl = this.players[u.owner];
@@ -2482,8 +2507,18 @@ export class Game {
       else { if (pl.wood !== undefined) pl.wood += amt; pl.logs = (pl.logs ?? 0) + amt; if (pl.wood !== undefined) pl.logs = pl.wood; }
       this.spawnFloat?.(u.x, u.z, `+${Math.round(amt)}`, cargo === 'rock' ? '#9aa0a8' : cargo === 'crystal' ? '#7de8ff' : '#4ade80');
       u.carrying = 0; u.returning = false; u.cargo = null;
-      // delivery complete: stand idle, never auto-seek the next tree
+      // delivery complete: chain the next load automatically (all kingdoms),
+      // same resource kind, so workers labour continuously until stopped.
+      // Mill hands and holding workers are exempt — they stay at their post.
       u.harvestTarget = null; u.harvestManual = false; u.hasOrder = false;
+      if (!u.assignedMill && !u.holdPosition) {
+        const next = this.nearestResourceLike?.(u.x, u.z, cargo === 'rock' ? 'rock' : cargo === 'crystal' ? 'crystal' : 'tree', 90)
+          || this.nearestResource(u.x, u.z);
+        if (next && this.resourceReady(next)) {
+          u.harvestTarget = next; u.harvestManual = true; u.gathering = 0;
+          u.hasOrder = true; u.path = null; u.idleT = 0;
+        }
+      }
       u.dropX = null; u.dropZ = null; u.dropFor = null;
       u.idleT = 0;
       return;
@@ -2551,6 +2586,8 @@ export class Game {
 
     // MOVE order
     if (u.hasOrder) {
+      // formation released on final approach: full speed for the last metres
+      if (u.moveCap && u.tx !== undefined && Math.hypot(u.tx - u.x, u.tz - u.z) < 8) u.moveCap = null;
       if (this.navigate(u, u.tx, u.tz, dt, 0.6, 2.5) === 'arrived') {
         // Shift-queue: pop the next waypoint instead of idling
         if (u.wpQueue && u.wpQueue.length) {
@@ -2586,9 +2623,12 @@ export class Game {
     const pushPair = (a, b) => {
       const dx = b.x - a.x, dz = b.z - a.z;
       const d = Math.hypot(dx, dz);
-      const min = a.radius + b.radius + 0.12;
+      // co-workers share tight spaces (trees, mills, drop points): relax at
+      // 25% strength so they nestle instead of shoving each other forever
+      const soft = a.type === 'worker' && b.type === 'worker' && a.owner === b.owner;
+      const min = (a.radius + b.radius + 0.12) * (soft ? 0.55 : 1);
       if (d < min && d > 0.0001) {
-        const push = (min - d);
+        const push = (min - d) * (soft ? 0.25 : 1);
         const nx = dx / d, nz = dz / d;
         const aAnch = !!a.fireAnchor || (a.lastShotT ?? 99) < 0.4;
         const bAnch = !!b.fireAnchor || (b.lastShotT ?? 99) < 0.4;
@@ -2936,8 +2976,12 @@ export class Game {
     });
     // in combat only damp separation at very close range; never fully off
     // (full-off was letting units stack inside each other while chasing)
-    let vx = dx + sx * (combat && d <= 3 ? 0.9 : 1.4);
-    let vz = dz + sz * (combat && d <= 3 ? 0.9 : 1.4);
+    // separation falls off with distance to the waypoint: units flow smoothly
+    // over open ground (0.7x) and only spread hard near arrival (1.4x), so
+    // crowds stop jittering in place while still never stacking on arrival.
+    const sepK = combat && d <= 3 ? 0.9 : d > 12 ? 0.7 : 1.4;
+    let vx = dx + sx * sepK;
+    let vz = dz + sz * sepK;
     const vl = Math.hypot(vx, vz) || 1;
     vx /= vl; vz /= vl;
     const step = Math.min(Math.min(u.speed, u.moveCap || u.speed) * dt, d);

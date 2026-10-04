@@ -9,8 +9,8 @@ export const PLAYER_COLOR = 0x2f6fed; // royal blue, always the human
 export function kingdomColor(index) {
   if (index === 0) return PLAYER_COLOR;
   const hue = (index * 137.508) % 360; // golden angle
-  const sat = 0.65 + (index % 3) * 0.1; // 0.65 / 0.75 / 0.85
-  const light = 0.5 + ((index >> 1) % 2) * 0.08; // 0.50 / 0.58
+  const sat = 0.62 + (index % 3) * 0.13; // 0.62 / 0.75 / 0.88 — wider steps
+  const light = 0.42 + ((index >> 1) % 3) * 0.09; // 0.42 / 0.51 / 0.60 — 3 bands
   return new THREE.Color().setHSL(hue / 360, sat, light).getHex();
 }
 

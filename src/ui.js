@@ -507,8 +507,10 @@ export class HUD {
       if (hq) ap(this.trainBtn(hq, 'worker'));
       const rax = g.buildings.find(b => b.owner === g.humanId && b.type === 'barracks' && !b.dead);
       if (rax) ap(this.trainBtn(rax, 'soldier'));
-      if (hq) ap(this.actBtn('barracks', 'Expand', 'place Barracks / Turret / Wall', () => g.startPlacement('barracks'), CONFIG.barracksCost));
-      if (hq) ap(this.actBtn('wall', 'Wall', 'quick blocker', () => g.startPlacement('wall'), CONFIG.wallCost));
+      const place = (t) => { const m = BLD_META[t]; if (m) ap(this.actBtn(m.icon, m.name, `place ${m.name}`, () => g.startPlacement(t), m.cost())); };
+      place('barracks');
+      for (const t of ['house', 'farm', 'mill', 'lumber', 'quarry', 'depot', 'tower']) place(t);
+      place('wall');
     }
   }
 

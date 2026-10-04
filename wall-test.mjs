@@ -358,7 +358,8 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   g.updateUnit(w, 0.1);
   ok('cargo hands over on drop arrival', w.carrying === 0 && g.players.k0.logs === before + 5,
     `carry=${w.carrying} logs=${g.players.k0.logs}`);
-  ok('delivery ends the job: worker idles', !w.hasOrder && !w.harvestTarget && !w.returning && w.harvestManual === false);
+  ok('delivery chains the next load: worker keeps working', w.carrying === 0 && (w.harvestTarget !== null || w.hasOrder === true) && !w.returning,
+    `target=${!!w.harvestTarget} order=${w.hasOrder}`);
   void hq;
 }
 

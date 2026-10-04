@@ -26,6 +26,16 @@ export const ICONS = {
   clock: S(`<circle cx="12" cy="12" r="8"/><path d="M12 8v4.2l3 1.8"/>`),
   supply: S(`<circle cx="9" cy="8" r="3"/><path d="M3.5 20c.7-3.4 2.9-5.2 5.5-5.2s4.8 1.8 5.5 5.2"/><path d="M15.5 5.4a3 3 0 0 1 0 5.4M17.5 14.9c1.9.8 3 2.5 3 4.4"/>`),
   shield: S(`<path d="M12 3l7 2.8v5.7c0 4.4-2.9 7.3-7 9-4.1-1.7-7-4.6-7-9V5.8z"/>`),
+  spear: S(`<circle cx="9" cy="8" r="2.6"/><path d="M4.5 20c.7-3.2 2.4-5 4.5-5 1 0 2 .3 2.8.9"/><path d="M4 16L19 4"/><path d="M16.5 3.5L20.5 7.5l-1.8 1.8-4-4z"/>`),
+  archer: S(`<circle cx="9" cy="8" r="2.4"/><path d="M4.5 20c.6-3 2.2-4.8 4.5-4.8"/><path d="M14 4c3 2.5 3 11.5 0 16"/><path d="M14 4v16M14 12H5"/>`),
+  knight: S(`<circle cx="12" cy="8" r="3"/><path d="M12 5V3.5M9.5 4L8 2.5M14.5 4L16 2.5"/><path d="M5.5 20c.8-3.6 3-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M4 10.5h5"/>`),
+  healer: S(`<circle cx="12" cy="7.5" r="2.8"/><path d="M6 20c.7-3.2 2.8-5 6-5s5.3 1.8 6 5"/><path d="M17.5 3.5v5M15 6h5"/>`),
+  ram: S(`<rect x="3" y="9" width="12" height="6" rx="3"/><path d="M15 10.5L21 7v10l-6-3.5"/><circle cx="7.5" cy="18.5" r="1.8"/><circle cx="13" cy="18.5" r="1.8"/>`),
+  farm: S(`<path d="M3.5 10L12 5.5 20.5 10"/><path d="M3.5 10h17"/><path d="M6 10v3.5h4V10M10 10v3.5h4V10M14 10v3.5h4V10M6 17h12"/>`),
+  mill: S(`<path d="M8 20l1.5-9h5L16 20"/><path d="M7 20h10"/><path d="M12 11L4 5M12 11l8-6M12 11v9"/><circle cx="12" cy="11" r="1.2"/>`),
+  quarry: S(`<path d="M4 18L9 9l4 5 3-3 4 7z"/><path d="M9 9l1.5-3L14 8"/>`),
+  gold: S(`<circle cx="12" cy="12" r="7.5"/><path d="M12 7.5v9M9 9.5h3.5a2 2 0 0 1 0 4H9l4 3"/>`),
+  crown: S(`<path d="M4 17L3 8l5.5 3.5L12 5l3.5 6.5L21 8l-1 9z"/><path d="M4 20h16"/>`),
 };
 
 export function icon(name, cls = '') {
