@@ -547,7 +547,7 @@ export class KingdomBrain {
       const ratio = (this.power(avail.slice(0, sendable)) + 1) / this.foeStrength(best.fid);
       if (ratio >= 0.5 || best.gr.anger >= 5) {
         const pact = g.diplomacy ? g.diplomacy.get(this.owner, best.fid).type : 'war';
-        this._betrayNext = pact === 'alliance' || pact === 'ceasefire';
+        this._betrayNext = pact === 'alliance' || pact === 'ceasefire' || pact === 'challenged';
         this.launch('revenge', best.fid, avail.slice(0, sendable), hq);
         return;
       }
@@ -587,7 +587,7 @@ export class KingdomBrain {
       if (d > P.reach) continue;
       const ratio = myPower / this.foeStrength(fid);
       const pact = diplo ? diplo.get(this.owner, fid).type : 'war';
-      const bound = pact === 'alliance' || pact === 'ceasefire';
+      const bound = pact === 'alliance' || pact === 'ceasefire' || pact === 'challenged';
       if (bound && !(treacherous && ratio >= 2.0 && Math.random() < 0.15)) continue;
       cands.push({ fid, ratio, d, w: (ratio * ratio) / (1 + d / 150), betray: bound });
     }

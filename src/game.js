@@ -6,6 +6,15 @@ import { buildingModel } from './buildings3d.js';
 import { kitBuilding, kitUnit } from './kit.js';
 
 let UID = 1;
+// decorative overlays (territory discs, underglows, rings, bars, rally lines)
+// must never intercept taps — the raycaster hits them otherwise and the tap
+// "selects" whatever they are attached to (e.g. a 70m HQ disc eats the map)
+function noPick(root) {
+  try {
+    root.traverse((o) => { if (o.isMesh || o.isLine || o.isSprite) o.raycast = () => {}; });
+  } catch { /* headless */ }
+  return root;
+}
 // scratch matrices for harvest scaling (no per-chop allocation)
 const _sv = new THREE.Matrix4();
 const _tm = new THREE.Matrix4();
@@ -347,6 +356,7 @@ export class Game {
     const fg = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.18), new THREE.MeshBasicMaterial({ color: 0x4ade80, depthTest: false, transparent: true }));
     fg.position.z = 0.001;
     grp.add(bg, fg);
+    noPick(grp);
     // hidden until damaged/selected: ~2000 entities x 2 transparent planes
     // was always drawn + sorted every frame (a major mobile GPU cost)
     grp.visible = false;
@@ -366,6 +376,7 @@ export class Game {
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.06;
     ring.visible = false;
+    noPick(ring);
     obj.add(ring);
     return ring;
   }
@@ -512,6 +523,7 @@ export class Game {
     const glow = new THREE.Mesh(new THREE.CircleGeometry(st.radius + 0.15, 24),
       new THREE.MeshBasicMaterial({ color: this.teamColor(owner), transparent: true, opacity: 0.35 }));
     glow.rotation.x = -Math.PI / 2; glow.position.y = 0.04;
+    noPick(glow);
     g.add(glow);
     let gem = null;
     if (type === 'worker') {
@@ -676,6 +688,7 @@ export class Game {
     const glow = new THREE.Mesh(new THREE.CircleGeometry(s * 0.72, 28),
       new THREE.MeshBasicMaterial({ color: this.teamColor(owner), transparent: true, opacity: 0.28 }));
     glow.rotation.x = -Math.PI / 2; glow.position.y = 0.06;
+    noPick(glow);
     g.add(glow);
     this.scene.add(g);
     const b = {
@@ -1126,7 +1139,7 @@ export class Game {
     const units = this.selected.filter(s => s.kind === 'unit' && !s.dead);
     // enemy tapped while we have an army -> attack (works with LEFT click too)
     if (hit && (hit.kind === 'unit' || hit.kind === 'building') && hit.owner !== this.humanId && hit.owner && units.length) {
-      this.orderAttack(units, hit);
+      this.attackOrBetray(units, hit);
       return;
     }
     // tree tapped while workers selected -> harvest
@@ -1197,6 +1210,19 @@ export class Game {
 
   orderAt(e) { this.orderAtPoint(e.clientX, e.clientY, null); }
 
+  // manual strike on a pact partner (ally/ceasefire/challenged) is betrayal:
+  // pay mobilization or hold. Returns false when the strike is refused.
+  attackOrBetray(units, target) {
+    const foe = target?.owner;
+    if (foe && units.length && foe !== units[0].owner && this.diplomacy) {
+      try {
+        if (this.diplomacy.atPeace(units[0].owner, foe) && !this.diplomacy.betray(units[0].owner, foe)) return false;
+      } catch { return false; }
+    }
+    this.orderAttack(units, target);
+    return true;
+  }
+
   // unified order entry: point + optional forced mode (mobile buttons / M key)
   orderAtPoint(sx, sy, forced) {
     if (!this.selected.length) return;
@@ -1215,7 +1241,7 @@ export class Game {
 
     // forced modes from mobile buttons
     if (forced === 'attack') {
-      if (hit && (hit.kind === 'unit' || hit.kind === 'building') && hit.owner !== units[0].owner) this.orderAttack(units, hit);
+      if (hit && (hit.kind === 'unit' || hit.kind === 'building') && hit.owner !== units[0].owner) this.attackOrBetray(units, hit);
       else this.orderAttackMove(units, pX, pZ);
       return;
     }
@@ -1241,7 +1267,7 @@ export class Game {
       // soldiers tapped tree -> just move there
       this.orderMove(units, pX, pZ);
     } else if (hit && (hit.kind === 'unit' || hit.kind === 'building') && hit.owner !== units[0].owner) {
-      this.orderAttack(units, hit);
+      this.attackOrBetray(units, hit);
     } else if (hit && hit.kind === 'building' && hit.owner === units[0].owner && hit.type === 'hq') {
       const carriers = units.filter(u => u.type === 'worker' && u.carrying > 0);
       if (carriers.length) this.orderReturn(carriers, hit);
@@ -1433,6 +1459,7 @@ export class Game {
     if (b.rallyLine) this.scene.remove(b.rallyLine);
     const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(b.x, 0.3, b.z), new THREE.Vector3(b.rallyX, 0.3, b.rallyZ)]);
     b.rallyLine = new THREE.Line(g, new THREE.LineDashedMaterial({ color: 0x4ade80, dashSize: 0.8, gapSize: 0.5 }));
+    noPick(b.rallyLine);
     b.rallyLine.computeLineDistances();
     this.scene.add(b.rallyLine);
     clearTimeout(b._rallyT);
@@ -2048,6 +2075,7 @@ export class Game {
         new THREE.MeshBasicMaterial({ color: this.teamColor(hq.owner), transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }));
       edge.rotation.x = -Math.PI / 2; edge.position.y = 0.06;
       g.add(disc, edge);
+      noPick(g);
       hq.mesh.add(g);
       hq.terrRing = g;
     } catch { /* headless */ }
@@ -3462,8 +3490,13 @@ export class Game {
   breachTarget(u, maxD = 16) {
     let best = null, bd = maxD;
     const seesAll = u.owner !== this.humanId;
+    const pacted = (other) => {
+      try { return this.diplomacy ? this.diplomacy.atPeace(u.owner, other) : false; }
+      catch { return false; }
+    };
     this.eachBuildingNear(u.x, u.z, maxD + 4, (b) => {
       if (b.owner === u.owner) return;
+      if (pacted(b.owner)) return; // never chew through a pact partner
       if (!seesAll && !b.mesh.visible) return;
       const d = Math.hypot(b.x - u.x, b.z - u.z);
       const score = d + (b.type === 'wall' ? -4 : 0); // prefer chewing walls

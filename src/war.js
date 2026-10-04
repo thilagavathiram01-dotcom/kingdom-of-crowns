@@ -152,13 +152,13 @@ export function installWar(game, ai) {
         if ((br.activeWars || 0) >= th.maxWars) return;
         // early guard: no day-one rushes (readiness gate, not a timer)
         if (buildingCount(game, br) < WAR.minBuildings && kind !== 'revenge') return;
-        // pact-bound target? this is betrayal — pay mobilization or stand down
+        // pact-bound target? this is betrayal — pay mobilization or stand down.
+        // (challenged windows break free; alliances/ceasefires cost the fee.)
         const pact = game.diplomacy?.get(br.owner, foe)?.type;
-        const treachery = br._betrayNext || pact === 'alliance' || pact === 'ceasefire';
+        const pactBound = pact === 'alliance' || pact === 'ceasefire' || pact === 'challenged';
         br._betrayNext = false;
-        if (treachery) {
-          if (!game.diplomacy && pact) return;
-          if (game.diplomacy && !game.diplomacy.betray(br.owner, foe)) return; // cannot pay
+        if (pactBound) {
+          if (!game.diplomacy || !game.diplomacy.betray(br.owner, foe)) return; // cannot pay
         } else {
           game.diplomacy?.declareWar(br.owner, foe);
         }
