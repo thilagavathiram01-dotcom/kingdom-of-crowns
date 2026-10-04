@@ -2218,9 +2218,14 @@ export class Game {
   nearestEnemy(x, z, owner, maxDist) {
     let best = null, bd = maxDist;
     const seesAll = owner !== this.humanId;
+    const pacted = (other) => {
+      try { return this.diplomacy ? this.diplomacy.atPeace(owner, other) : false; }
+      catch { return false; }
+    };
     // fast path: nearby units via spatial grid
     this.eachNear(x, z, maxDist, (u) => {
       if (u.owner === owner || u.dead) return;
+      if (pacted(u.owner)) return; // allies / ceasefire are never targets
       if (!seesAll && !u.mesh.visible) return; // can't target what you can't see
       const d = Math.hypot(u.x - x, u.z - z);
       if (d < bd) { bd = d; best = u; }
@@ -2228,6 +2233,7 @@ export class Game {
     // buildings via spatial hash (forts have hundreds of wall pieces)
     this.eachBuildingNear(x, z, maxDist, (b) => {
       if (b.owner === owner) return;
+      if (pacted(b.owner)) return;
       if (!seesAll && !b.mesh.visible) return;
       const d = Math.hypot(b.x - x, b.z - z);
       if (d < bd) { bd = d; best = b; }

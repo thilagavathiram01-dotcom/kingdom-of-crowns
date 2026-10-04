@@ -158,6 +158,16 @@ export const PERSONALITY_WAR = {
 
 export const WORLD_EVENTS = { minGapSec: 300, maxGapSec: 480 };
 
+// Diplomacy logistics (wood + food — no counts, no gold).
+// Every pact is bought, and breaking one costs mobilization.
+export const DIPLO = {
+  ceasefire: { wood: 150, food: 150, minutes: 10 },
+  alliance: { wood: 300, food: 300 },
+  betray: { wood: 200, food: 200 },   // mobilization to break a pact
+  tribute: { wood: 200, food: 200 }, // buys a 10-min ceasefire
+  truceMinutes: 3, // free desperate truce when a loser cannot pay
+};
+
 export const AGES = [
   { id: 0, name: 'I. Village', cost: null },
   { id: 1, name: 'II. Castle', cost: { food: 250, wood: 200 } },

@@ -27,6 +27,8 @@ export function installRealms(game, ai) {
   game.worldEvents = R.events;
   // AI brain lookup for ambition scaling (kingdom id -> KingdomBrain)
   game._brainOf = (kid) => ai?.byOwner?.get(kid) || null;
+  // brains by owner for diplomacy grudges (victim hears about betrayal)
+  game.aiBrains = ai?.byOwner || null;
   game.realmPlacementValid = (type, x, z) => !canPlaceFor(game, game.humanId, type, x, z);
   game.realmPlacementReason = (type, x, z) => canPlaceFor(game, game.humanId, type, x, z) || null;
   game.worldToScreen = (x, z) => {

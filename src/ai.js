@@ -517,6 +517,8 @@ export class KingdomBrain {
     if (best && sendable >= 4) {
       const ratio = (this.power(avail.slice(0, sendable)) + 1) / this.foeStrength(best.fid);
       if (ratio >= 0.5 || best.gr.anger >= 5) {
+        const pact = g.diplomacy ? g.diplomacy.get(this.owner, best.fid).type : 'war';
+        this._betrayNext = pact === 'alliance' || pact === 'ceasefire';
         this.launch('revenge', best.fid, avail.slice(0, sendable), hq);
         return;
       }
@@ -535,6 +537,10 @@ export class KingdomBrain {
     // patience runs out the longer a kingdom has been "ready" without a good target
     const need = P.attackRatio * Math.max(0.55, 1 - (now - P.readyAt) / 1200);
     const cands = [];
+    const diplo = g.diplomacy;
+    // treacherous streak: warlords & grudge-holders may break a pact for a
+    // crushing win — if they can pay the mobilization fee
+    const treacherous = (P.militarism > 0.75 || P.vengeance > 0.9) && diplo && diplo.canPay(this.owner, { wood: 200, food: 200 });
     for (const fid of g.aliveKingdoms()) {
       if (fid === this.owner) continue;
       if ((this.foeCD.get(fid) || 0) > now) continue;
@@ -543,7 +549,10 @@ export class KingdomBrain {
       const d = Math.hypot(h.x - hq.x, h.z - hq.z);
       if (d > P.reach) continue;
       const ratio = myPower / this.foeStrength(fid);
-      cands.push({ fid, ratio, d, w: (ratio * ratio) / (1 + d / 150) });
+      const pact = diplo ? diplo.get(this.owner, fid).type : 'war';
+      const bound = pact === 'alliance' || pact === 'ceasefire';
+      if (bound && !(treacherous && ratio >= 2.0 && Math.random() < 0.15)) continue;
+      cands.push({ fid, ratio, d, w: (ratio * ratio) / (1 + d / 150), betray: bound });
     }
     if (!cands.length) return;
     let pool = cands.filter(c => c.ratio >= need);
@@ -556,6 +565,7 @@ export class KingdomBrain {
     const tot = pool.reduce((s, c) => s + c.w, 0);
     let roll = Math.random() * tot, chosen = pool[0];
     for (const c of pool) { roll -= c.w; if (roll <= 0) { chosen = c; break; } }
+    this._betrayNext = !!chosen.betray;
     this.launch('invade', chosen.fid, avail.slice(0, sendable), hq);
   }
 

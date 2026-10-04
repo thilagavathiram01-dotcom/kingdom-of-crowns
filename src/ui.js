@@ -684,7 +684,41 @@ export class HUD {
           }
         }));
         ap(demolish());
-      } else if (['farm', 'market', 'embassy', 'house', 'lumber', 'smith', 'wonder'].includes(single.type)) {
+      } else if (single.type === 'embassy') {
+        const dip = g.diplomacy;
+        const hint = document.createElement('div');
+        hint.className = 'side-hint';
+        hint.textContent = 'Embassy: buy pacts with wood + food. Pacts stop all fighting between the pair — even auto-defenses hold fire.';
+        this.elBuild.appendChild(hint);
+        if (dip) {
+          // rivals: those fighting us first, then strongest — max 6 rows
+          const rivals = g.aliveKingdoms().filter((id) => !g.isHuman(id));
+          rivals.sort((a, b) => {
+            const aw = dip.get(g.humanId, a).type === 'war' ? 0 : 1;
+            const bw = dip.get(g.humanId, b).type === 'war' ? 0 : 1;
+            if (aw !== bw) return aw - bw;
+            return (g.powerOf?.(b) || 0) - (g.powerOf?.(a) || 0);
+          });
+          for (const rid of rivals.slice(0, 6)) {
+            const rel = dip.get(g.humanId, rid).type;
+            const nm = g.players[rid]?.name || rid;
+            const badge = rel === 'alliance' ? '🤝 allied' : rel === 'ceasefire' ? '🕊️ ceasefire' : '⚔️ war';
+            const row = document.createElement('div');
+            row.className = 'side-hint';
+            row.textContent = `${nm} — ${badge}`;
+            this.elBuild.appendChild(row);
+            const btn = (label, title, fn) => ap(this.actBtn('flag', label, title, () => { fn(); this.onSelect(g.selected); }));
+            if (rel === 'war') {
+              btn('Ceasefire 150🪵150🌾', `Buy 10 min peace with ${nm}`, () => dip.ceasefire(g.humanId, rid, 10, g.humanId));
+              btn('Ally 300🪵300🌾', `Permanent alliance + shared vision with ${nm}`, () => dip.ally(g.humanId, rid, g.humanId));
+              btn('Tribute 200🪵200🌾', `Pay tribute for 10 min peace with ${nm}`, () => dip.offerTribute(g.humanId, rid));
+            } else {
+              btn('Betray 200🪵200🌾', `Break the pact and attack ${nm} (they will hold a grudge)`, () => dip.betray(g.humanId, rid));
+            }
+          }
+        }
+        ap(demolish());
+      } else if (['farm', 'market', 'house', 'lumber', 'smith', 'wonder'].includes(single.type)) {
         const hint = document.createElement('div');
         hint.className = 'side-hint';
         const bdef = BUILD_DEFS[single.type];
@@ -754,6 +788,12 @@ export class HUD {
     if (g.terrainThumb) c.drawImage(g.terrainThumb, 0, 0, W, Hh);
     else { c.fillStyle = '#0a1410'; c.fillRect(0, 0, W, Hh); }
     const hex = (id) => '#' + (g.teamColor(id) ?? 0x888888).toString(16).padStart(6, '0');
+    // shared vision: allies are always drawn, even inside our fog
+    const seesThroughFog = (id) => {
+      if (g.isHuman(id)) return true;
+      try { return g.diplomacy ? g.diplomacy.isAllied(g.humanId, id) : false; }
+      catch { return false; }
+    };
 
     // Territory glow around each HQ in kingdom colours
     for (const b of g.buildings) {
@@ -765,7 +805,7 @@ export class HUD {
     }
     // Buildings
     for (const b of g.buildings) {
-      if (b.dead || !b.mesh?.visible) continue;
+      if (b.dead || (!b.mesh?.visible && !seesThroughFog(b.owner))) continue;
       c.fillStyle = hex(b.owner);
       const s = b.type === 'hq' ? 7 : b.type === 'wall' ? 2 : 4;
       c.fillRect(wx(b.x) - s / 2, wz(b.z) - s / 2, s, s);
@@ -783,7 +823,7 @@ export class HUD {
     // Units
     let dots = 0;
     for (const u of g.units) {
-      if (u.dead || !u.mesh?.visible || dots > 900) continue;
+      if (u.dead || (!u.mesh?.visible && !seesThroughFog(u.owner)) || dots > 900) continue;
       dots++;
       c.fillStyle = hex(u.owner);
       c.fillRect(wx(u.x) - 1, wz(u.z) - 1, 2, 2);

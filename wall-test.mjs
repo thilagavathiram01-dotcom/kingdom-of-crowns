@@ -568,5 +568,54 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   void NEW_HQ_COST;
 }
 
+// ---------- 19. diplomacy logistics run on wood + food ----------
+{
+  const g = fakeGame();
+  g.spawnPing = () => {};
+  g.time = 0;
+  g.players.k0 = { id: 'k0', idx: 0, logs: 1000, wood: 1000, food: 1000, alive: true, color: 0x2f6fed };
+  g.players.k1 = { id: 'k1', idx: 1, logs: 1000, wood: 1000, food: 1000, alive: true, color: 0xef4444 };
+  g.players.k2 = { id: 'k2', idx: 2, logs: 10, wood: 10, food: 10, alive: true, color: 0x22c55e };
+  const { Diplomacy } = await import('./src/diplomacy.js');
+  const dip = new Diplomacy(g);
+  g.diplomacy = dip;
+  // paid ceasefire deducts from the payer and binds the pair
+  ok('ceasefire charges wood+food', dip.ceasefire('k0', 'k1', 10, 'k0') === true
+    && g.players.k0.wood === 850 && g.players.k0.food === 850, `w=${g.players.k0.wood} f=${g.players.k0.food}`);
+  ok('ceasefire binds both sides', dip.underCeasefire('k0', 'k1') && dip.underCeasefire('k1', 'k0'));
+  // broke kingdom cannot buy peace
+  ok('broke kingdom cannot buy ceasefire', dip.ceasefire('k2', 'k1', 10, 'k2') === false
+    && dip.get('k2', 'k1').type === 'war');
+  // free truce still works for losers
+  ok('desperate truce is free', dip.truce('k2', 'k1') === true && dip.underCeasefire('k2', 'k1'));
+  // alliance with an already pact-bound pair costs nothing extra
+  const preW = g.players.k0.wood;
+  ok('re-allied pair stays bound for free', dip.ally('k0', 'k1', 'k0') === true && g.players.k0.wood === preW);
+  const g2wood = g.players.k0.wood;
+  g.players.k3 = { id: 'k3', idx: 3, logs: 1000, wood: 1000, food: 1000, alive: true, color: 0xa855f7 };
+  ok('fresh alliance is paid', dip.ally('k0', 'k3', 'k0') === true && g.players.k0.wood === g2wood - 300 && dip.isAllied('k0', 'k3'));
+  // betrayal needs the fee and breaks the pact into war
+  const bw = g.players.k0.wood, bf = g.players.k0.food;
+  ok('betrayal mobilizes wood+food', dip.betray('k0', 'k3') === true
+    && g.players.k0.wood === bw - 200 && g.players.k0.food === bf - 200
+    && dip.get('k0', 'k3').type === 'war');
+  // betrayal without funds fails and the pact holds
+  g.players.k2.wood = 10; g.players.k2.food = 10;
+  dip.relations.set(dip.key('k2', 'k3'), { type: 'alliance', until: Infinity });
+  ok('broke kingdom cannot betray', dip.betray('k2', 'k3') === false && dip.isAllied('k2', 'k3'));
+  // tribute moves wood+food and buys peace
+  g.players.k2.wood = 500; g.players.k2.food = 500;
+  const k1w = g.players.k1.wood;
+  ok('tribute pays and pacifies', dip.offerTribute('k2', 'k1') === true
+    && g.players.k1.wood === k1w + 200 && dip.underCeasefire('k2', 'k1'));
+  // pact-bound pairs are never valid targets
+  const a = g.spawnUnit('soldier', 'k0', 0, 0);
+  const foe = g.spawnUnit('soldier', 'k1', 2, 0);
+  a.x = 0; a.z = 0; foe.x = 2; foe.z = 0;
+  g.rebuildGrid();
+  const found = g.nearestEnemy(0, 0, 'k0', 30);
+  ok('ceasefire partners are not enemies', found !== foe, `found=${found?.type}/${found?.owner}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

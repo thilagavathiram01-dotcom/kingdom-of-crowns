@@ -152,7 +152,16 @@ export function installWar(game, ai) {
         if ((br.activeWars || 0) >= th.maxWars) return;
         // early guard: no day-one rushes (readiness gate, not a timer)
         if (buildingCount(game, br) < WAR.minBuildings && kind !== 'revenge') return;
-        game.diplomacy?.declareWar(br.owner, foe);
+        // pact-bound target? this is betrayal — pay mobilization or stand down
+        const pact = game.diplomacy?.get(br.owner, foe)?.type;
+        const treachery = br._betrayNext || pact === 'alliance' || pact === 'ceasefire';
+        br._betrayNext = false;
+        if (treachery) {
+          if (!game.diplomacy && pact) return;
+          if (game.diplomacy && !game.diplomacy.betray(br.owner, foe)) return; // cannot pay
+        } else {
+          game.diplomacy?.declareWar(br.owner, foe);
+        }
         br.activeWars = (br.activeWars || 0) + 1;
         rawLaunch(kind, foe, units, myHq);
       };
@@ -163,8 +172,11 @@ export function installWar(game, ai) {
         br.activeWars = Math.max(0, (br.activeWars || 0) - 1);
         if (reason === 'losing' || reason === 'wiped') {
           br.warCooldownUntil = game.time + WAR.cooldownSec;
-          // sue for peace when readiness < 50%
-          game.diplomacy?.ceasefire(br.owner, br.wave?.foe, 10);
+          // sue for peace: paid ceasefire if affordable, else a free truce
+          const foe = br.wave?.foe;
+          if (foe && !game.diplomacy?.ceasefire(br.owner, foe, 10, br.owner)) {
+            game.diplomacy?.truce(br.owner, foe);
+          }
         }
         rawEnd(reason);
       };
