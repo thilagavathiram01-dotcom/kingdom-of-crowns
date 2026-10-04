@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, BUILD_DEFS, TERRAIN_SPEED } from './config.js';
+import { CONFIG, BUILD_DEFS, TERRAIN_SPEED, AGES } from './config.js';
 import { tickFarm, tickMill, tickUpkeep, tickStarvationDamage } from './economy.js';
 import { WorldEvents } from './events.js';
 import { Diplomacy } from './diplomacy.js';
@@ -33,8 +33,7 @@ export function installRealms(game, ai) {
     } catch { return null; }
   };
 
-  registerRockNodes(game);
-  registerCrystalNodes(game);
+  // stone / crystal nodes are removed resource types: timber only.
   spawnPickups(game);
   spawnVillages(game);
 
@@ -86,11 +85,32 @@ export function installRealms(game, ai) {
     mill.workers = mill.workers || [];
     let n = 0;
     for (const u of units) {
-      if (u.type !== 'worker') continue;
+      if (u.type !== 'worker' || u.dead) continue;
       if (mill.workers.length >= 4) break;
       if (mill.workers.includes(u)) continue;
-      u.harvestTarget = null; u.target = null; u.hasOrder = false; u.returning = false;
+      // leave any previous mill crew first so counts stay honest
+      if (u.assignedMill && u.assignedMill !== mill && u.assignedMill.workers) {
+        const i = u.assignedMill.workers.indexOf(u);
+        if (i >= 0) u.assignedMill.workers.splice(i, 1);
+      }
+      // hands full of timber? Cash it in on the spot as wood — mill hands
+      // never haul, so a delivery detour first would just add a struggling
+      // trip across the base before they even start walking to the mill.
+      if (u.carrying > 0) {
+        const pl = game.players[u.owner];
+        if (pl.wood !== undefined) pl.wood += u.carrying;
+        pl.logs = (pl.logs ?? 0) + u.carrying;
+        if (pl.wood !== undefined) pl.logs = pl.wood;
+        game.spawnFloat?.(u.x, u.z, `+${Math.round(u.carrying)}`, '#4ade80');
+        u.carrying = 0; u.cargo = null;
+      }
+      u.harvestTarget = null; u.harvestManual = false; u.target = null; u.objective = null;
+      u.returning = false;
+      u.hasOrder = false; u.path = null; u.repathT = 0; u.fireAnchor = null;
+      u.holdPosition = false; u.wpQueue = null; u.stuckT = 0; u.idleT = 0; u.moveCap = null;
+      u.dropX = null; u.dropZ = null; u.dropFor = null;
       u.assignedMill = mill;
+      u.millSlot = -1; // (re)assigned below in realmTick
       mill.workers.push(u);
       n++;
     }
@@ -101,16 +121,15 @@ export function installRealms(game, ai) {
   game.ageUp = (owner) => {
     const st = game.players[owner];
     const next = (st.age || 0) + 1;
-    const ages = [{}, { food: 300, wood: 200, stone: 100 }, { food: 600, stone: 400, gold: 300 }, { food: 1000, stone: 800, gold: 600 }];
-    const cost = ages[next];
+    const cost = AGES[next]?.cost;
     if (!cost) return false;
     if (!canAfford(st, cost)) {
-      if (owner === game.humanId) game.hookMsg('Not enough resources to advance age');
+      if (owner === game.humanId) game.hookMsg(`Not enough resources to advance — need ${fmtCost(cost)}`);
       return false;
     }
     payCost(st, cost);
     st.age = next;
-    game.hookMsg(`🏰 ${st.name} advanced to Age ${['I', 'II', 'III', 'IV'][next]}!`);
+    game.hookMsg(`🏰 ${st.name} advanced to Age ${['I', 'II', 'III', 'IV'][next]}! New buildings & troops unlocked`);
     return true;
   };
 
@@ -143,16 +162,49 @@ function realmTick(game, R, dt) {
     } else if (b.type === 'mill') {
       // prune dead/reassigned workers
       b.workers = (b.workers || []).filter((w) => !w.dead && w.assignedMill === b);
-      // idle mill workers stand at slots
-      b.workers.forEach((w, i) => {
-        const a = (i / 4) * Math.PI * 2;
-        const px = b.x + Math.cos(a) * 2.5, pz = b.z + Math.sin(a) * 2.5;
-        const d = Math.hypot(w.x - px, w.z - pz);
-        if (d <= 2.5) {
-          // on station: plant feet, stop micro-walking (no jitter)
-          w.hasOrder = false; w.path = null; w.tx = w.x; w.tz = w.z;
-        } else if (!w.target) {
-          w.tx = px; w.tz = pz; w.hasOrder = true; w.path = null;
+      // idle mill workers stand at slots OUTSIDE the footprint.
+      // Issue the walk order once and let navigate() finish it — never
+      // null the path every frame (that forced an A* per worker per frame,
+      // the main source of hitching + "perf mode" spam after assigning).
+      // Slots are STABLE per worker (not array index): when one hand leaves,
+      // the rest keep their spots instead of all crossing paths at once
+      // (the old index slots reshuffled everybody on every change).
+      b.slotTaken = b.slotTaken || [null, null, null, null];
+      // release slots of departed hands
+      for (let s = 0; s < 4; s++) {
+        const o = b.slotTaken[s];
+        if (o && (o.dead || o.assignedMill !== b)) b.slotTaken[s] = null;
+      }
+      b.workers.forEach((w) => {
+        if (w.dead || w.target || w.holdPosition) return;
+        if (w.millSlot === undefined || w.millSlot < 0 || b.slotTaken[w.millSlot] !== w) {
+          const free = b.slotTaken.findIndex((o) => !o || o.dead || o.assignedMill !== b);
+          if (free < 0) return; // mill full: extra hands idle nearby, no slot fight
+          if (w.millSlot >= 0 && b.slotTaken[w.millSlot] === w) b.slotTaken[w.millSlot] = null;
+          w.millSlot = free; b.slotTaken[free] = w;
+          w.millX = undefined; // force anchor recompute below
+        }
+        const slotR = (b.radius || 2.4) + 1.3;
+        const a = (w.millSlot / 4) * Math.PI * 2 + 0.4;
+        const px = b.x + Math.cos(a) * slotR, pz = b.z + Math.sin(a) * slotR;
+        // sticky anchor: keep walking to the same spot, don't re-target mid-walk
+        if (w.millX === undefined) {
+          w.millX = px; w.millZ = pz;
+          // only (re)order when clearly off-station or idle without orders
+          const d = Math.hypot(w.x - px, w.z - pz);
+          if (d > 1.2 && !w.hasOrder) { w.tx = px; w.tz = pz; w.hasOrder = true; w.path = null; w.repathT = 0; }
+          else if (d > 1.2 && (Math.hypot((w.tx ?? w.x) - px, (w.tz ?? w.z) - pz) > 1.5)) {
+            w.tx = px; w.tz = pz; w.hasOrder = true; w.path = null; w.repathT = 0;
+          }
+        } else {
+          const d = Math.hypot(w.x - w.millX, w.z - w.millZ);
+          if (d <= 1.2) {
+            // on station: plant feet and face the mill
+            if (w.hasOrder) { w.hasOrder = false; w.path = null; w.tx = w.x; w.tz = w.z; w.moveCap = null; }
+            w.angle = Math.atan2(b.z - w.z, b.x - w.x);
+          } else if (!w.hasOrder && d > 1.8) {
+            w.tx = w.millX; w.tz = w.millZ; w.hasOrder = true; w.path = null; w.repathT = 0;
+          }
         }
       });
       const used = tickMill(game, b, dt);
@@ -167,7 +219,6 @@ function realmTick(game, R, dt) {
   }
   tickUpkeep(game, dt);
   tickStarvationDamage(game, dt);
-  tickRegrowRocks(game, dt);
   tickAIEconomy(game, R, dt);
   tickCaravans(game, R, dt);  tickVillages(game, dt);
   tickPickups(game);
@@ -178,8 +229,9 @@ function realmTick(game, R, dt) {
   checkWins(game, R);
 }
 
-// AI resource-awareness for ALL kingdoms: mills, farms, quarries,
-// lumber camps, houses — placed by rule, staffed, and defended.
+// AI resource-awareness for ALL kingdoms: mills, farms, houses, markets —
+// placed by rule, staffed, and defended. (Quarries / lumber camps are gone
+// with stone: the AI runs the same wood + food economy as the player.)
 function tickAIEconomy(game, R, dt) {
   R.aiEcoT = (R.aiEcoT || 0) + dt;
   if (R.aiEcoT < 5) return; // 0.2 Hz per-kingdom planner
@@ -188,16 +240,20 @@ function tickAIEconomy(game, R, dt) {
     if (game.isHuman(id)) continue;
     try { aiEconomyFor(game, id); } catch { /* ignore */ }
   }
-  // staff mills with idle workers (all kingdoms incl. human idle AI workers)
+  // staff mills with idle workers (AI kingdoms only — never steal the
+  // human's idle workers; that yanked freshly-tasked hands across the map
+  // and looked like "workers struggling after assigning to buildings").
   for (const b of game.buildings) {
     if (b.dead || b.type !== 'mill') continue;
     b.workers = (b.workers || []).filter((w) => !w.dead && w.assignedMill === b);
     if (b.workers.length >= 4) continue;
+    if (game.isHuman(b.owner)) continue;
     for (const u of game.units) {
       if (b.workers.length >= 4) break;
       if (u.dead || u.owner !== b.owner || u.type !== 'worker') continue;
       if (u.assignedMill || u.harvestTarget || u.hasOrder || u.returning) continue;
       u.assignedMill = b;
+      u.millSlot = -1;
       b.workers.push(u);
     }
   }
@@ -243,23 +299,7 @@ function aiEconomyFor(game, id) {
       if (s) tryBuild('farm', s.x, s.z);
     }
   }
-  // 3. quarry on closest rock cluster
-  if (count('quarry') < 1 && game.time > 120) {
-    const rock = game.nearestResourceLike?.(hq.x, hq.z, 'rock', 120);
-    if (rock) {
-      const s = free(rock.x + 4, rock.z + 4, 2);
-      if (s) tryBuild('quarry', s.x, s.z);
-    }
-  }
-  // 4. lumber camp at forest edge
-  if (count('lumber') < 1 && game.time > 100) {
-    const tree = game.nearestResourceLike?.(hq.x, hq.z, 'tree', 120);
-    if (tree) {
-      const s = free(tree.x + 5, tree.z, 2);
-      if (s) tryBuild('lumber', s.x, s.z);
-    }
-  }
-  // 5. market + embassy in age III towns
+  // 3. market + embassy in age III towns
   if ((st.age || 0) >= 2 && count('market') < 1 && game.time > 600) {
     const s = free(hq.x - 12, hq.z + 8, 2.5);
     if (s) tryBuild('market', s.x, s.z);
@@ -280,20 +320,7 @@ function nearestFoeHq(game, id) {
   return best;
 }
 
-function tickRegrowRocks(game, dt) {
-  // depleted rocks come back after ~5-10 min (stone never runs out)
-  for (const r of game.resources) {
-    if (r.rtype !== 'rock' || !r.depleted) continue;
-    r.regrowT = (r.regrowT ?? 300) - dt;
-    if (r.regrowT <= 0) {
-      r.depleted = false;
-      r.amount = r.max || 150;
-      if (r.mesh) { r.mesh.visible = true; r.mesh.scale.setScalar(r.baseScale || 1); }
-    }
-  }
-}
-
-function tickCaravans(game, R, dt) {  // every Market sends a caravan to a friendly kingdom every 90s → gold
+function tickCaravans(game, R, dt) {  // every Market sends a caravan every 90s → food
   R.caravanT -= dt;
   const fair = R.events.modifier('fair') ? 2 : 1;
   if (R.caravanT > 0) return;
@@ -303,10 +330,10 @@ function tickCaravans(game, R, dt) {  // every Market sends a caravan to a frien
     const owner = game.players[b.owner];
     if (!owner?.alive) continue;
     const gain = 40 * fair;
-    owner.gold = (owner.gold || 0) + gain;
+    owner.food = (owner.food || 0) + gain;
     if (b.owner === game.humanId) {
-      game.hookMsg(`🐪 Caravan returned +${gain} gold`);
-      game.spawnFloat?.(b.x, b.z, `+${gain}`, '#ffd34d');
+      game.hookMsg(`🐪 Caravan returned +${gain} food`);
+      game.spawnFloat?.(b.x, b.z, `+${gain}`, '#e3b23c');
     }
   }
 }
@@ -317,7 +344,7 @@ function tickVillages(game, dt) {
   game._villageT = 0;
   for (const v of game.villages || []) {
     if (v.owner && game.players[v.owner]?.alive) {
-      game.players[v.owner].gold = (game.players[v.owner].gold || 0) + 2; // +2 gold/s
+      game.players[v.owner].food = (game.players[v.owner].food || 0) + 2; // +2 food/s
     }
   }
 }
@@ -331,8 +358,11 @@ function tickPickups(game) {
       p.taken = true;
       const pl = game.players[u.owner];
       if (p.kind === 'chest') {
-        pl.gold = (pl.gold || 0) + 150;
-        if (u.owner === game.humanId) game.hookMsg('💰 Treasure chest +150 gold');
+        pl.wood = (pl.wood || 0) + 100;
+        pl.logs = (pl.logs ?? 0) + 100;
+        if (pl.wood !== undefined) pl.logs = pl.wood;
+        pl.food = (pl.food || 0) + 50;
+        if (u.owner === game.humanId) game.hookMsg('📦 Supply cache +100 wood, +50 food');
       } else if (p.kind === 'shard') {
         pl.shards = (pl.shards || 0) + 1;
         game.hookMsg(`👑 ${pl.name} claimed a crown shard (${pl.shards}/15)`);
@@ -441,7 +471,14 @@ function terrainSpeedMul(game, x, z) {
     // bridges = road (chokepoints, x1.2); forest near trees x0.7; river bank x0.6
     if (game.onBridge?.(x, z)) return TERRAIN_SPEED.road;
     if (game.terrain?.blocked?.(x, z)) return 1; // impassable handled elsewhere
-    if (game.nearestResourceLike?.(x, z, 'tree', 6)) return TERRAIN_SPEED.forest;
+    // HOT PATH (runs per moving unit per frame): grid query, never a full
+    // linear scan over ~1000 trees — the old nearestResourceLike call here
+    // was O(units × resources) every frame and the main lag source.
+    let wooded = false;
+    game.eachResourceNear?.(x, z, 6, (r) => {
+      if (r.rtype === 'tree' && game.resourceReady?.(r)) { wooded = true; return false; }
+    });
+    if (wooded) return TERRAIN_SPEED.forest;
     const y = game.gy ? game.gy(x, z) : 0;
     const wl = game.terrain?.waterY ?? -1.0;
     if (y <= wl + 1.2) return TERRAIN_SPEED.bank;

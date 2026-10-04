@@ -1,8 +1,7 @@
 import { MILL, UPKEEP } from './config.js';
 
-// README-2 § Economy: workers, mills and farms.
-// Farm --(grain)--> Mill --(assigned workers)--> Food.
-// Pure-logic helper: Game owns the entities, this owns the rules.
+// Economy: workers, mills, farms, and food upkeep.
+// Workers stationed at Mills actively produce food. Adjacent Farms provide raw grain which mills grind for bonus food.
 
 export const MILL_DEF = MILL;
 
@@ -10,39 +9,57 @@ export function farmsNear(game, mill, radius = MILL.linkRadius) {
   const out = [];
   for (const b of game.buildings) {
     if (b.dead || b.owner !== mill.owner || b.type !== 'farm') continue;
-    // farms store grain on b.grain (auto-produced); default 0
     if (Math.hypot(b.x - mill.x, b.z - mill.z) <= radius) out.push(b);
   }
   return out;
 }
 
 export function tickFarm(farm, dt) {
-  farm.grain = Math.min(40, (farm.grain || 0) + dt * (1 / 4)); // +1 grain / 4s
+  farm.grain = Math.min(40, (farm.grain || 0) + dt * (1 / 3)); // +1 grain every 3s
 }
 
 export function tickMill(game, mill, dt) {
   const workers = mill.workers || (mill.workers = []);
+  if (!workers.length) {
+    mill.active = false;
+    return 0;
+  }
+
+  // Base output: stationed workers actively generate food
+  const baseRate = MILL.baseFoodPerWorkerPerSec ?? 0.6;
+  const baseFood = workers.length * baseRate * dt;
+
+  // Bonus output: grinding grain from nearby connected farms
   const farms = farmsNear(game, mill);
-  let grain = farms.reduce((s, f) => s + (f.grain || 0), 0);
-  const capacity = workers.length * MILL.grainPerWorkerPerSec * dt;
-  const used = Math.min(grain, capacity);
-  if (used > 0) {
-    let need = used;
+  const grainTotal = farms.reduce((sum, f) => sum + (f.grain || 0), 0);
+  const grainCapacity = workers.length * (MILL.bonusGrainPerWorkerPerSec ?? 0.8) * dt;
+  const usedGrain = Math.min(grainTotal, grainCapacity);
+
+  if (usedGrain > 0) {
+    let need = usedGrain;
     for (const f of farms) {
       const take = Math.min(f.grain || 0, need);
       f.grain -= take;
       need -= take;
       if (need <= 0) break;
     }
-    const pl = game.players[mill.owner];
-    if (pl) pl.food = (pl.food || 0) + used * MILL.foodPerGrain;
   }
-  mill.active = used > 0;
-  return used;
+
+  const totalFood = baseFood + usedGrain * (MILL.foodPerGrain ?? 1);
+  const pl = game.players[mill.owner];
+  if (pl) pl.food = (pl.food || 0) + totalFood;
+
+  mill.active = totalFood > 0;
+  mill._floatT = (mill._floatT || 0) + dt;
+  if (mill.owner === game.humanId && mill._floatT > 2.5) {
+    mill._floatT = 0;
+    game.spawnFloat?.(mill.x, mill.z, `+${Math.round(totalFood * 2.5)}🌾`, '#e3b23c');
+  }
+
+  return totalFood;
 }
 
-// Upkeep: each unit costs food/sec. Starvation slows workers 30% and
-// drains soldier HP 1 per 10s.
+// Upkeep: each unit costs food/sec. Starvation slows workers and damages soldiers
 export function tickUpkeep(game, dt) {
   for (const id of Object.keys(game.players)) {
     const pl = game.players[id];

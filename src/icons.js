@@ -13,7 +13,9 @@ export const ICONS = {
   hq: S(`<path d="M3.5 11L12 4l8.5 7"/><path d="M5.5 9.5V20h13V9.5"/><path d="M10 20v-5.5h4V20"/>`),
   barracks: S(`<path d="M3.5 20v-8.5L9 14V9.5l5.5 3V6.5H20V20z"/><path d="M3.5 20h17"/>`),
   turret: S(`<circle cx="12" cy="14.5" r="5"/><path d="M12 14.5V4"/><path d="M12 4h6"/><path d="M7.5 21h9"/>`),
-  wall: S(`<path d="M4 9.5h16V19H4z"/><path d="M4 14h16M9 9.5V14M14.5 9.5V14M6.5 14v5M12 14v5M17.5 14v5"/>`),  move: S(`<path d="M12 3.5L19 20l-7-3.8L5 20z"/>`),
+  tower: S(`<path d="M6 21h12M7.5 21V9l1.5-5h6l1.5 5v12M9 4v3M15 4v3M9 13h6M10 17h4"/>`),
+  wall: S(`<path d="M4 9.5h16V19H4z"/><path d="M4 14h16M9 9.5V14M14.5 9.5V14M6.5 14v5M12 14v5M17.5 14v5"/>`),
+  move: S(`<path d="M12 3.5L19 20l-7-3.8L5 20z"/>`),
   attack: S(`<circle cx="12" cy="12" r="6.5"/><path d="M12 2.5V6M12 18v3.5M2.5 12H6M18 12h3.5"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/>`),
   harvest: S(`<path d="M7.5 4h9L21 9.5 12 20 3 9.5z"/><path d="M3 9.5h18M12 20L8.5 9.5 12 4l3.5 5.5z"/>`),
   stop: S(`<rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none"/>`),
@@ -36,6 +38,15 @@ export const ICONS = {
   quarry: S(`<path d="M4 18L9 9l4 5 3-3 4 7z"/><path d="M9 9l1.5-3L14 8"/>`),
   gold: S(`<circle cx="12" cy="12" r="7.5"/><path d="M12 7.5v9M9 9.5h3.5a2 2 0 0 1 0 4H9l4 3"/>`),
   crown: S(`<path d="M4 17L3 8l5.5 3.5L12 5l3.5 6.5L21 8l-1 9z"/><path d="M4 20h16"/>`),
+  lock: S(`<rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/><circle cx="12" cy="16" r="1.2" fill="currentColor"/>`),
+  lumber: S(`<path d="M14 4l6 6-3 3-6-6zM8 16l6-6M4 20l5-5"/>`),
+  smith: S(`<path d="M4 18h16M7 18v-4h10v4M5 14h14l-2-5H7zM11 5l2 4M14 5l-2 4"/>`),
+  temple: S(`<path d="M3 21h18M5 21V10M19 21V10M9 21V10M15 21V10M3 10L12 4l9 6"/><path d="M12 4v3"/>`),
+  siege: S(`<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M4 15.5h16M8 15.5l7-9.5h4M12 15.5l2-4"/>`),
+  stable: S(`<path d="M4 21V9l8-5 8 5v12M9 21v-6h6v6M9 9h6"/>`),
+  market: S(`<path d="M3 9l2-5h14l2 5M3 9h18v12H3zM9 13a3 3 0 0 0 6 0"/>`),
+  embassy: S(`<path d="M4 4h16v16H4zM4 9h16M9 4v16"/><circle cx="14" cy="14" r="2"/>`),
+  wonder: S(`<path d="M12 2l3 6 6 1-4.5 4.5 1 6.5-5.5-3-5.5 3 1-6.5L3 9l6-1z"/>`),
 };
 
 export function icon(name, cls = '') {

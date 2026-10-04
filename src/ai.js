@@ -368,8 +368,10 @@ export class KingdomBrain {
     }
 
     // ---- 2. ECONOMY: workers always harvesting logs (continuous) ----
+    // mill hands are exempt — they stay at their mill, not chopped to trees
     for (const w of S.workers) {
       w.retreating = false;
+      if (w.assignedMill) continue;
       if ((!w.hasOrder && !g.resourceReady(w.harvestTarget) && w.carrying === 0) || (w.harvestTarget && !g.resourceReady(w.harvestTarget))) {
         w.harvestTarget = g.nearestResource(w.x, w.z);
         w.returning = false;

@@ -10,10 +10,7 @@ export function quickSave(game) {
       seed: game.seed ?? null,
       players: Object.fromEntries(Object.entries(game.players).map(([id, p]) => [id, {
         wood: p.wood ?? p.logs ?? 0,
-        stone: p.stone ?? 0,
         food: p.food ?? 0,
-        gold: p.gold ?? 0,
-        crystal: p.crystal ?? p.logs ?? 0,
         alive: p.alive,
         age: p.age ?? 0,
         shards: p.shards ?? 0,
@@ -46,9 +43,9 @@ export function quickLoad(game) {
     for (const [id, s] of Object.entries(data.players || {})) {
       const p = game.players[id];
       if (!p) continue;
-      p.wood = s.wood; p.logs = s.wood;
-      p.stone = s.stone; p.food = s.food; p.gold = s.gold;
-      p.crystal = s.crystal; p.alive = s.alive; p.age = s.age; p.shards = s.shards;
+      p.wood = s.wood ?? 0; p.logs = s.wood ?? 0;
+      p.food = s.food ?? 0;
+      p.alive = s.alive; p.age = s.age ?? 0; p.shards = s.shards ?? 0;
     }
     game.time = data.time || 0;
     game.hookMsg?.('📂 Loaded quick save');

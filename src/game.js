@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, COLORS, kingdomColor, kingdomName } from './config.js';
+import { CONFIG, COLORS, kingdomColor, kingdomName, BUILD_REQUIRES, UNIT_REQUIRES, BUILD_DEFS, UNIT_DEFS, TRAIN_AGE, AGE_NAMES } from './config.js';
 import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite } from './terrain.js';
 import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE, createAdventurerRig, ADVENTURER_SCALE } from './workers3d.js';
 import { buildingModel } from './buildings3d.js';
@@ -20,8 +20,9 @@ export class Game {
     this.adventurerModels = !!assets.adventurerModels;
     // KayKit castle/barracks/tower/wall models, or null -> procedural boxes
     this.buildingModels = !!assets.buildingModels;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia?.('(pointer: coarse)').matches;
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.25 : 1.5));
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0b0e14);
     this.scene.fog = new THREE.Fog(0x0b0e14, 60, 160);
@@ -59,24 +60,20 @@ export class Game {
     // ---- kingdoms: k0 = human, k1..k29 = AI ----
     this.humanId = 'k0';
     this.players = {};
-    const startLogs = CONFIG.startLogs ?? CONFIG.startCrystals;
+    const startLogs = CONFIG.startLogs ?? 300;
+    const startFood = CONFIG.startFood ?? 250;
     for (let i = 0; i < CONFIG.kingdoms; i++) {
       const id = `k${i}`;
       const wood0 = startLogs * (i === 0 ? 1 : 0.9 + Math.random() * 0.3);
+      const food0 = startFood * (i === 0 ? 1 : 0.9 + Math.random() * 0.3);
       this.players[id] = {
         id, idx: i, name: kingdomName(i), color: kingdomColor(i),
         logs: wood0,
         wood: wood0,
-        stone: (CONFIG.startStone ?? 150) * (i === 0 ? 1 : 0.9 + Math.random() * 0.3),
-        food: (CONFIG.startFood ?? 250) * (i === 0 ? 1 : 0.9 + Math.random() * 0.3),
-        gold: (CONFIG.startGold ?? 100) * (i === 0 ? 1 : 0.9 + Math.random() * 0.3),
-        crystal: (CONFIG.startCrystal ?? 300),
-        age: 0, shards: i === 0 ? 0 : 0, starving: false,
-        get crystals() { return this.logs; },
-        set crystals(v) { this.logs = v; },
+        food: food0,
+        age: 0, shards: 0, starving: false,
         alive: true,
       };
-      this.players[id].crystal = this.players[id].logs;
     }
 
     // candidate HQ sites on a jittered grid; peaks are repelled from all of
@@ -1280,6 +1277,7 @@ export class Game {
         u.radius, u);
       u.tx = spot.x; u.tz = spot.z;
       u.target = null; u.objective = null; u.harvestTarget = null; u.returning = false;
+      this.releaseMill(u);
       u.hasOrder = true; u.holdPosition = false; u.idleT = 0; u.path = null; u.attackMove = false;
       u.fireAnchor = null; u.repathT = 0;
       u.wpQueue = null; // fresh order clears the queue
@@ -1309,31 +1307,70 @@ export class Game {
     this.hookMsg('Attack-move: engaging anything in the way');
   }
 
+  // each worker gets its own spot on the ring around the node so a squad
+  // doesn't pile onto one point and shove forever (the harvest jitter).
+  harvestAnchorFor(u, n) {
+    if (u.hFor !== n.id) {
+      const k = (u.id || 0) % 6;
+      const a = (k / 6) * Math.PI * 2 + (n.id % 7) * 0.35;
+      const r = (n.radius || 1.4) + 1.1;
+      u.hFor = n.id;
+      u.hx = n.x + Math.cos(a) * r;
+      u.hz = n.z + Math.sin(a) * r;
+    }
+    return u;
+  }
+
   orderHarvest(workers, node) {
     for (const u of workers) {
+      this.releaseMill(u);
       u.harvestTarget = node; u.target = null; u.objective = null; u.returning = false;
       u.hasOrder = true; u.harvestManual = true; u.gathering = 0; u.idleT = 0; u.path = null; u.fireAnchor = null; u.holdPosition = false;
+      this.harvestAnchorFor(u, node);
+      u.lastWoodX = node.x; u.lastWoodZ = node.z;
+      u.tx = u.hx ?? node.x; u.tz = u.hz ?? node.z;
       // if already full, go drop off first
-      if (u.carrying >= (CONFIG.resource?.carryMax ?? 10)) { const hq = this.hqOf(u.owner); if (hq) { u.returning = true; u.tx = hq.x; u.tz = hq.z; } }
+      if (u.carrying >= (CONFIG.resource?.carryMax ?? 10)) {
+        const hq = this.hqOf(u.owner);
+        if (hq) {
+          const drop = this.hqDropSpot(hq, u);
+          u.returning = true; u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id;
+          u.tx = drop.x; u.tz = drop.z; u.path = null;
+        }
+      }
     }
     this.spawnPing(node.x, node.z, 0x4ade80);
     this.hookMsg(`Chopping trees for logs (${workers.length} worker${workers.length > 1 ? 's' : ''})`);
   }
 
+  // explicit move/attack/return orders pull the worker off mill duty —
+  // otherwise the mill slot magnet fights the user's order every frame
+  // (the "workers struggle after assigning to buildings" tug-of-war).
+  releaseMill(u) {
+    const m = u.assignedMill;
+    if (m?.workers) {
+      const i = m.workers.indexOf(u);
+      if (i >= 0) m.workers.splice(i, 1);
+    }
+    if (m?.slotTaken && u.millSlot >= 0 && m.slotTaken[u.millSlot] === u) m.slotTaken[u.millSlot] = null;
+    u.assignedMill = null; u.millSlot = -1; u.millX = undefined; u.millZ = undefined;
+  }
+
   orderReturn(workers, hq) {
     for (const u of workers) {
+      this.releaseMill(u);
       const drop = this.hqDropSpot(hq, u);
       u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id;
       u.tx = drop.x; u.tz = drop.z; u.target = null; u.objective = null; u.harvestTarget = null;
       u.gathering = 0; u.hasOrder = true; u.returning = true; u.idleT = 0; u.path = null; u.fireAnchor = null;
+      u.holdPosition = false;
     }
     this.spawnPing(hq.x, hq.z, 0x4ade80);
     this.hookMsg('Returning cargo to HQ');
   }
 
   orderAttack(units, target) {
-    // fan out around the target at weapon range so stacked soldiers
-    // don't pile onto one point and jitter while firing
+    for (const u of units) this.releaseMill(u);
     const fighters = units.filter(u => u.type !== 'worker');
     fighters.forEach((u, i) => {
       u.target = target; u.harvestTarget = null; u.hasOrder = true;
@@ -1345,6 +1382,12 @@ export class Game {
       const pz = THREE.MathUtils.clamp(target.z + Math.sin(a) * standOff, -this.mapBound(4), this.mapBound(4));
       const spot = this.findFreeSpot(px, pz, u.radius, u);
       u.tx = spot.x; u.tz = spot.z;
+    });
+    // workers ordered to attack will move to engage
+    const workers = units.filter(u => u.type === 'worker');
+    workers.forEach(w => {
+      w.target = target; w.harvestTarget = null; w.hasOrder = true;
+      w.tx = target.x; w.tz = target.z; w.path = null; w.holdPosition = false;
     });
     this.spawnPing(target.x, target.z, 0xef4444);
   }
@@ -1438,8 +1481,35 @@ export class Game {
   }
 
   hqDropSpot(hq, u) {
-    const slot = (hq._dropSeq = (hq._dropSeq || 0) + 1);
-    return this.rallySpotFor({ rallyX: hq.x + hq.radius + 1.4, rallyZ: hq.z }, u?.type || 'worker', slot);
+    // Drop spot sits just outside the HQ collider on the worker's natural side of arrival
+    const angle = u ? Math.atan2(u.z - hq.z, u.x - hq.x) : 0;
+    const r = hq.radius + 1.2;
+    return {
+      x: hq.x + Math.cos(angle) * r,
+      z: hq.z + Math.sin(angle) * r,
+    };
+  }
+
+  // nearby-tree reseek: same-kind node close by, with a per-worker anchor and movement goal
+  reseekTree(u, maxD = 60) {
+    const next = this.nearestResourceLike?.(u.x, u.z, 'tree', maxD);
+    if (next && next !== u.harvestTarget && this.resourceReady(next)) {
+      u.harvestTarget = next;
+      u.harvestManual = true;
+      u.gathering = 0;
+      u.hasOrder = true;
+      u.returning = false;
+      u.path = null;
+      u.repathT = 0;
+      u.idleT = 0;
+      this.harvestAnchorFor(u, next);
+      u.tx = u.hx ?? next.x;
+      u.tz = u.hz ?? next.z;
+      u.lastWoodX = next.x;
+      u.lastWoodZ = next.z;
+      return true;
+    }
+    return false;
   }
 
   // ---------- colliders / free space ----------
@@ -1540,10 +1610,14 @@ export class Game {
       if (Math.hypot(x - r.x, z - r.z) < r.radius + 0.2 + radius) { blocked = true; return false; }
     });
     if (blocked) return false;
-    for (const u of this.units) {
-      if (u.dead || u === ignoreUnit) continue;
-      if (Math.hypot(x - u.x, z - u.z) < u.radius + radius + 0.15) return false;
-    }
+    // units via spatial hash (was a full O(n) scan per spot check — ordering
+    // a group or spiralling a rally did hundreds of these in one frame)
+    let hitUnit = false;
+    this.eachNear(x, z, radius + 2.2, (u) => {
+      if (u.dead || u === ignoreUnit) return;
+      if (Math.hypot(x - u.x, z - u.z) < u.radius + radius + 0.15) { hitUnit = true; return false; }
+    });
+    if (hitUnit) return false;
     return true;
   }
 
@@ -1565,7 +1639,10 @@ export class Game {
   startPlacement(type = 'barracks') {
     this.cancelPlacement();
     const costRes = this.buildingCostRes ? this.buildingCostRes(type) : { wood: this.buildingCost(type) };
-    const costN = costRes.wood ?? costRes.stone ?? costRes.gold ?? this.buildingCost(type);
+    const costN = costRes.wood ?? costRes.food ?? this.buildingCost(type);
+    // age gate first: locked buildings never enter placement (toast explains)
+    const lock = this.buildingLock ? this.buildingLock(this.humanId, type) : null;
+    if (lock) { this.hookMsg(`🔒 ${lock}`); return; }
     const pretty = { turret: 'Defense Turret', tower: 'Watchtower', wall: 'Wall', hq: 'HQ', mill: 'Mill', farm: 'Farm', house: 'House', lumber: 'Lumber Camp', quarry: 'Quarry', depot: 'Crystal Depot', barracks: 'Barracks', archery: 'Archery Range', stable: 'Stable', siege: 'Siege Workshop', smith: 'Blacksmith', temple: 'Temple', market: 'Market', embassy: 'Embassy', wonder: 'Crown Hall (Wonder)' };
     const name = pretty[type] || (type[0].toUpperCase() + type.slice(1));
     if (!this.canAffordRes(this.humanId, costRes)) { this.hookMsg(`Need ${costN} resources for ${name}`); return; }
@@ -1699,7 +1776,13 @@ export class Game {
     this.camTarget.set(s.x, 0, s.z);
   }
   stopSelected() {
-    for (const u of this.selected) if (u.kind === 'unit' && !u.dead) { u.hasOrder = false; u.attackMove = false; u.target = null; u.objective = null; u.harvestTarget = null; u.harvestManual = false; u.returning = false; u.dropX = null; u.dropZ = null; u.dropFor = null; u.idleT = 0; u.path = null; u.tx = u.x; u.tz = u.z; u.holdPosition = true; u.fireAnchor = null; }
+    for (const u of this.selected) if (u.kind === 'unit' && !u.dead) {
+      this.releaseMill(u);
+      u.hasOrder = false; u.attackMove = false; u.target = null; u.objective = null;
+      u.harvestTarget = null; u.harvestManual = false; u.returning = false;
+      u.dropX = null; u.dropZ = null; u.dropFor = null; u.idleT = 0; u.path = null;
+      u.tx = u.x; u.tz = u.z; u.holdPosition = true; u.fireAnchor = null;
+    }
     this.hookMsg('Holding position');
   }
 
@@ -1714,41 +1797,85 @@ export class Game {
     return table[type] ?? 100;
   }
   unitCostRes(type) {
-    // README-2 multi-resource costs; legacy single-number costs bill wood/logs
+    // wood + food only (stone / crystal / gold are removed resource types)
     const multi = {
-      worker: { food: 50 }, swordsman: { food: 60, crystal: 20 }, spearman: { food: 50, wood: 20 },
-      archer: { wood: 50, gold: 30 }, knight: { food: 90, crystal: 40 }, scout: { food: 40 },
-      healer: { gold: 60 }, catapult: { wood: 120, stone: 60 }, ram: { wood: 100 }, spy: { gold: 100 },
-      hero_king: { food: 200, gold: 200 }, hero_champion: { food: 200, gold: 200 }, hero_archmage: { crystal: 200, gold: 250 },
-      soldier: { food: 60, crystal: 20 }, tank: { food: 90, crystal: 40 }, brute: { food: 70, wood: 20 },
-      hunter: { food: 50, wood: 20 }, artillery: { wood: 120, stone: 60 },
+      worker: { food: 50 }, swordsman: { food: 60, wood: 20 }, spearman: { food: 50, wood: 20 },
+      archer: { food: 40, wood: 30 }, knight: { food: 90, wood: 40 }, scout: { food: 40 },
+      healer: { food: 60 }, catapult: { wood: 120, food: 60 }, ram: { wood: 100, food: 20 }, spy: { food: 100 },
+      hero_king: { food: 200, wood: 200 }, hero_champion: { food: 200, wood: 200 }, hero_archmage: { food: 200, wood: 250 },
+      soldier: { food: 60, wood: 20 }, tank: { food: 90, wood: 40 }, brute: { food: 70, wood: 20 },
+      hunter: { food: 50, wood: 20 }, artillery: { wood: 120, food: 60 },
     };
     if (multi[type]) return multi[type];
     return { wood: this.unitCost(type) };
   }
+  // producer gate: which building is authorized to train this unit?
   canTrain(building, type) {
     if (building.type === 'hq') {
-      if (type === 'worker' || type === 'scout') return true;
-      // heroes: one per kingdom, trained at HQ from Age II
-      if (['hero_king', 'hero_champion', 'hero_archmage'].includes(type)) {
-        return (this.players[building.owner]?.age || 0) >= 1;
-      }
+      if (type === 'worker' || type === 'scout' || type === 'spy') return true;
+      if (['hero_king', 'hero_champion', 'hero_archmage'].includes(type)) return true;
       return false;
     }
-    if (building.type === 'barracks') return ['soldier', 'swordsman', 'spearman', 'brute', 'hunter', 'tank', 'scout', 'artillery', 'knight', 'catapult', 'ram'].includes(type);
+    if (building.type === 'barracks') return ['soldier', 'swordsman', 'spearman', 'brute'].includes(type);
     if (building.type === 'archery') return ['archer', 'hunter', 'scout'].includes(type);
     if (building.type === 'stable') return ['knight', 'scout', 'tank'].includes(type);
     if (building.type === 'siege') return ['catapult', 'ram', 'artillery'].includes(type);
     if (building.type === 'temple') return ['healer'].includes(type);
     return false;
   }
-  // multi-resource banks; `logs` forever mirrors `wood` for legacy code/tests
+
+  // Lock reason for a unit (returns null if unlocked, or string explanation if locked)
+  unitLock(owner, type, building = null) {
+    const req = UNIT_REQUIRES[type];
+    const playerAge = this.players[owner]?.age || 0;
+    const needAge = req?.age ?? TRAIN_AGE[type] ?? 0;
+    const unitName = UNIT_DEFS[type]?.name || cap(type);
+
+    if (needAge > playerAge) {
+      return `Requires ${AGE_NAMES[needAge]} — advance at Town Center (HQ)`;
+    }
+    if (req?.building) {
+      if (building && building.type !== req.building && !(req.building === 'hq' && building.type === 'hq')) {
+        return `Requires ${req.name} to train ${unitName}`;
+      }
+      const hasProducer = this.buildings.some(b => b.owner === owner && !b.dead && b.type === req.building);
+      if (!hasProducer) {
+        return `Requires ${req.name} — construct it first`;
+      }
+    }
+    if (building && !this.canTrain(building, type)) {
+      return `${cap(building.type)} cannot train ${unitName}`;
+    }
+    return null;
+  }
+
+  trainLock(owner, building, type) {
+    return this.unitLock(owner, type, building);
+  }
+
+  // Lock reason for placing a building (returns null if unlocked, or string explanation if locked)
+  buildingLock(owner, type) {
+    const req = BUILD_REQUIRES[type];
+    const playerAge = this.players[owner]?.age || 0;
+    const needAge = req?.age || 0;
+    const bldName = BUILD_DEFS[type]?.name || cap(type);
+
+    if (needAge > playerAge) {
+      return `Requires ${AGE_NAMES[needAge]} — advance at Town Center (HQ)`;
+    }
+    if (req?.building) {
+      const hasPrereq = this.buildings.some(b => b.owner === owner && !b.dead && b.type === req.building);
+      if (!hasPrereq) {
+        return `Requires ${req.name || req.building} before constructing ${bldName}`;
+      }
+    }
+    return null;
+  }
+
+  // multi-resource banks (wood and food)
   bankOf(st, k) {
-    if (k === 'wood') return st.wood ?? st.logs ?? 0;
-    if (k === 'crystal') return st.crystal ?? st.logs ?? 0;
-    if (k === 'stone') return st.stone ?? st.logs ?? 0;
-    if (k === 'food') return st.food ?? st.logs ?? 0;
-    if (k === 'gold') return st.gold ?? st.logs ?? 0;
+    if (k === 'wood' || k === 'logs') return st.wood ?? st.logs ?? 0;
+    if (k === 'food') return st.food ?? 0;
     return st[k] ?? 0;
   }
   syncWood(st) { if (st.wood !== undefined && st.logs !== undefined) st.logs = st.wood; }
@@ -1770,9 +1897,12 @@ export class Game {
   }
   trainUnit(building, type) {
     if (!this.canTrain(building, type)) return false;
+    // locked behind an age gate: refuse with a clear reason (HUD shows 🔒 too)
+    const lock = this.trainLock(building.owner, building, type);
+    if (lock) { if (building.owner === this.humanId) this.hookMsg(`🔒 ${lock}`); return false; }
     const st = this.players[building.owner];
     // legacy banks (only logs): charge the classic single price from logs
-    const legacy = st.food === undefined && st.gold === undefined && st.stone === undefined && st.crystal === undefined;
+    const legacy = st.food === undefined;
     const cost = legacy ? { wood: this.unitCost(type) } : this.unitCostRes(type);
     const supplyUsed = this.units.filter(u => u.owner === building.owner && !u.dead).length;
     const supplyMax = this.supplyMax(building.owner);
@@ -1843,22 +1973,23 @@ export class Game {
       turret: CONFIG.turretCost,
       tower: 120,
       wall: CONFIG.wallCost,
-      house: 40, farm: 50, mill: 100, lumber: 40, quarry: 50, depot: 60,
-      archery: 130, stable: 200, siege: 320, smith: 160, temple: 160,
-      market: 150, embassy: 150, wonder: 1000,
+      house: 40, farm: 50, mill: 100, lumber: 40,
+      archery: 130, stable: 200, siege: 320, smith: 160, temple: 120,
+      market: 150, embassy: 100, wonder: 1500,
       hq: 0,
     }[type] ?? 0;
   }
   buildingCostRes(type) {
+    // wood + food only
     const table = {
-      house: { wood: 40 }, farm: { wood: 50 }, mill: { wood: 80, stone: 20 },
-      lumber: { wood: 40 }, quarry: { wood: 50 }, depot: { wood: 60 },
-      barracks: { wood: 120, stone: 40 }, archery: { wood: 100, stone: 30 },
-      stable: { wood: 140, stone: 60 }, siege: { wood: 200, stone: 120 },
-      smith: { wood: 100, stone: 60 }, temple: { stone: 120, gold: 40 },
-      tower: { wood: 60, stone: 60 }, turret: { wood: 60, stone: 60 },
-      wall: { stone: 5 }, market: { wood: 100, stone: 50 },
-      embassy: { gold: 150 }, wonder: { stone: 1500, wood: 1000, gold: 800 },
+      house: { wood: 40 }, farm: { wood: 50 }, mill: { wood: 100 },
+      lumber: { wood: 40 },
+      barracks: { wood: 150 }, archery: { wood: 130, food: 30 },
+      stable: { wood: 200, food: 60 }, siege: { wood: 320, food: 80 },
+      smith: { wood: 160, food: 40 }, temple: { wood: 120, food: 60 },
+      tower: { wood: 120 }, turret: { wood: 120 },
+      wall: { wood: 5 }, market: { wood: 150, food: 50 },
+      embassy: { wood: 100, food: 50 }, wonder: { wood: 1500, food: 1000 },
     };
     if (table[type]) return table[type];
     return { wood: this.buildingCost(type) };
@@ -1905,7 +2036,9 @@ export class Game {
   }
 
   // frame-time watchdog: step resolution/shadows down (or back up) so the
-  // game stays fluid on weak hardware instead of freezing
+  // game stays fluid on weak hardware instead of freezing.
+  // Hysteresis + cooldown: single-frame hitches (ordering 10 workers, one
+  // big A*) must NOT flip perf mode on/off and spam "Perf mode" messages.
   autoPerf() {
     const p = this.perf;
     const now = performance.now();
@@ -1913,23 +2046,33 @@ export class Game {
     p.last = now;
     p.ema = p.ema * 0.95 + Math.min(raw, 500) * 0.05;
     p.t += raw / 1000;
-    if (p.t < 3) return;
-    if (p.ema > 48 && p.level < 2) {
-      p.level++; p.t = 0;
+    p.cool = p.cool || 0;
+    p.cool -= raw / 1000;
+    p.hot = p.hot || 0; p.cold = p.cold || 0;
+    if (p.t < 6) return; // warm up: ignore load-screen / first-seconds spikes
+    if (p.cool > 0) return; // min gap between level changes
+    if (p.ema > 40) { p.hot++; p.cold = 0; } else if (p.ema < 17) { p.cold++; p.hot = 0; }
+    else { p.hot = 0; p.cold = 0; if (p.t > 12) p.t = 6; return; }
+    if (p.hot >= 3 && p.level < 2) {
+      // ~3 consecutive bad windows (≈ sustained, not one hitch)
+      p.level++; p.t = 0; p.cool = 8; p.hot = 0;
       this.applyPerfLevel();
-    } else if (p.ema < 19 && p.level > 0) {
-      p.level--; p.t = -4; // slower to step back up than down
+    } else if (p.cold >= 6 && p.level > 0) {
+      p.level--; p.t = 0; p.cool = 12; p.cold = 0;
       this.applyPerfLevel();
-    } else if (p.t > 10) {
-      p.t = 5;
     }
   }
 
   applyPerfLevel() {
     const L = this.perf.level;
+    const nowT = this.time || 0;
+    // one notice per level, at most every 20s — no message spam on flapping
+    const mayNote = !this._perfNoteT || nowT - this._perfNoteT > 20;
     if (L === 0) {
-      this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+      const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia?.('(pointer: coarse)').matches;
+      this.renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.25 : 1.5));
       if (this.sun) this.sun.castShadow = true;
+      if (this.waterFx?.tufts) this.waterFx.tufts.visible = true;
     } else if (L === 1) {
       this.renderer.setPixelRatio(1);
       if (this.sun) {
@@ -1937,7 +2080,7 @@ export class Game {
         this.sun.shadow.mapSize.set(1024, 1024);
         if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
       }
-      this.hookMsg('Perf mode: tuned for smoothness');
+      if (mayNote) { this.hookMsg('Perf mode: tuned for smoothness'); this._perfNoteT = nowT; }
     } else {
       // deepest perf level keeps shadows ON (never fully off): smaller shadow
       // map + sub-1.0 resolution + no grass tufts instead
@@ -1948,7 +2091,7 @@ export class Game {
         if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
       }
       if (this.waterFx?.tufts) this.waterFx.tufts.visible = false;
-      this.hookMsg('Perf mode: minimal detail, shadows kept');
+      if (mayNote) { this.hookMsg('Perf mode: minimal detail, shadows kept'); this._perfNoteT = nowT; }
     }
   }
 
@@ -2042,7 +2185,15 @@ export class Game {
   }
 
   nearestResource(x, z) {
+    // fast path via the static tree grid (trees are ~90% of resources);
+    // rocks/crystals are few so a short linear scan over non-trees is fine.
     let best = null, bd = 1e9;
+    this.eachResourceNear(x, z, 90, (r) => {
+      if (!this.resourceReady(r)) return;
+      const d = Math.hypot(r.x - x, r.z - z);
+      if (d < bd) { bd = d; best = r; }
+    });
+    if (best) return best;
     for (const r of this.resources) {
       if (!this.resourceReady(r)) continue;
       const d = Math.hypot(r.x - x, r.z - z);
@@ -2052,10 +2203,21 @@ export class Game {
   }
 
   nearestResourceLike(x, z, rtype, maxD = 60) {
+    if (rtype === 'tree' && this._resGrid) {
+      let best = null, bd = maxD;
+      this.eachResourceNear(x, z, maxD, (r) => {
+        if (r.rtype !== 'tree' || !this.resourceReady(r)) return;
+        const d = Math.hypot(r.x - x, r.z - z);
+        if (d < bd) { bd = d; best = r; }
+      });
+      return best;
+    }
     let best = null, bd = maxD;
     for (const r of this.resources) {
       if (r.rtype !== rtype || !this.resourceReady(r)) continue;
-      const d = Math.hypot(r.x - x, r.z - z);
+      const dx = r.x - x, dz = r.z - z;
+      if (Math.abs(dx) > bd || Math.abs(dz) > bd) continue;
+      const d = Math.hypot(dx, dz);
       if (d < bd) { bd = d; best = r; }
     }
     return best;
@@ -2221,8 +2383,14 @@ export class Game {
       // walk only when really covering ground: steering jitter and shoves in
       // a crowd must not play the stride (moonwalk), and the stride rate
       // follows ground speed so feet plant instead of glide.
-      const covering = moved > u.speed * dt * 0.3;
-      animateWorkerRig(r, dt, covering, dt > 0 ? moved / dt : 0);
+      // Latched with hysteresis: the raw threshold flapped every other frame
+      // on push-pull jitter, strobing the walk clip on/off (visual jitter
+      // even when the body barely moved).
+      const v = dt > 0 ? moved / dt : 0;
+      if (u._walkOn === undefined) u._walkOn = v > u.speed * 0.3;
+      else if (u._walkOn) { if (v < u.speed * 0.15) u._walkOn = false; }
+      else if (v > u.speed * 0.35) u._walkOn = true;
+      animateWorkerRig(r, dt, u._walkOn, v);
     }
   }
 
@@ -2230,6 +2398,8 @@ export class Game {
     if (this.over) return;
     this.time += dt;
     this.autoPerf();
+    // fresh A* allowance each frame (tighter when already degraded)
+    this._pathBudget = this.perf.level > 0 ? 3 : 6;
     this.updateCamera(dt);
 
     // chopped stumps regrow on a timer (endless timber); flush any
@@ -2282,21 +2452,33 @@ export class Game {
       const moved = Math.hypot(u.x - u.lastX, u.z - u.lastZ);
       // unstick: barely moved while trying to get somewhere -> drop cache,
       // repath, tiny sidestep. Anchored (firing) units are exempt — they are
-      // SUPPOSED to stand still. Harvest/mill duty counts too: a worker wedged
-      // behind a tree or another worker must shuffle free, not idle forever.
-      const wantsMove = (u.hasOrder || u.target || (u.harvestTarget && !u.returning)) && !u.fireAnchor && !u.holdPosition;
+      // SUPPOSED to stand still. Gathering workers are exempt too: they chop
+      // in place by design, and "barely moved" is their normal state, not
+      // stuck. Stationed mill hands are exempt for the same reason.
+      const gathering = u.type === 'worker' && u.harvestTarget && u.carrying < (CONFIG.resource?.carryMax ?? 10)
+        && Math.hypot(u.harvestTarget.x - u.x, u.harvestTarget.z - u.z) <= u.harvestTarget.radius + 1.6;
+      const stationed = u.assignedMill && !u.hasOrder;
+      const wantsMove = (u.hasOrder || u.target || (u.harvestTarget && !u.returning)) && !u.fireAnchor && !u.holdPosition && !gathering && !stationed;
       const followingPath = (u.hasOrder || u.target) && u.path && u.path.length;
       if (wantsMove && !u.fireAnchor) {
-        if (moved < Math.min(u.speed, u.moveCap || u.speed) * dt * 0.2) {
+        // 0.35 tolerance: separation nudges + arrival easing routinely dip a
+        // frame under 0.2x speed without being stuck. The old 0.2 threshold
+        // cried "stuck" during normal crowd shuffling, teleported the unit
+        // 0.8m sideways, and resolveOverlaps shoved it straight back ->
+        // the ping-pong "jitter in the same place".
+        if (moved < Math.min(u.speed, u.moveCap || u.speed) * dt * 0.35) {
           u.stuckT += dt;
-          const limit = followingPath ? 0.7 : 1.2;
+          const limit = followingPath ? 1.5 : 2.5;
           if (u.stuckT > limit) {
-            const goalX = u.harvestTarget && !u.hasOrder ? u.harvestTarget.x : (u.pathTx ?? u.tx ?? u.x);
-            const goalZ = u.harvestTarget && !u.hasOrder ? u.harvestTarget.z : (u.pathTz ?? u.tz ?? u.z);
+            // aim the sidestep at the real goal: per-worker anchor, not the
+            // tree center (old code sidestepped around the trunk then drove
+            // back to the other side, lapping forever).
+            const goalX = u.harvestTarget ? (u.hx ?? u.harvestTarget.x) : (u.pathTx ?? u.tx ?? u.x);
+            const goalZ = u.harvestTarget ? (u.hz ?? u.harvestTarget.z) : (u.pathTz ?? u.tz ?? u.z);
             u.stuckT = 0; u.path = null; u.repathT = 0;
-            // sidestep perpendicular to travel dir; never into a wall. Nearby
-            // units are ignored here because resolveOverlaps separates them
-            // after the teleport.
+            // small sidestep perpendicular to travel dir; never into a wall.
+            // Nearby units are ignored here because resolveOverlaps separates
+            // them after the teleport.
             const a = Math.atan2(u.z - goalZ, u.x - goalX) + Math.PI / 2;
             const tryStep = (ang, dist) => {
               const nx = THREE.MathUtils.clamp(u.x + Math.cos(ang) * dist, -this.mapBound(4), this.mapBound(4));
@@ -2304,7 +2486,7 @@ export class Game {
               if (!this.pointBlocked(nx, nz, u.radius) && this.spotClearOfWorld(nx, nz, u.radius, u)) { u.x = nx; u.z = nz; return true; }
               return false;
             };
-            if (!tryStep(a, 0.8)) tryStep(a + Math.PI, 0.8);
+            if (!tryStep(a, 0.5)) tryStep(a + Math.PI, 0.5);
           }
         } else u.stuckT = 0;
       } else {
@@ -2429,98 +2611,123 @@ export class Game {
     // validate target
     if (u.target && (u.target.dead || (u.target.kind === 'resource') || (u.target.amount !== undefined && u.target.amount <= 0))) u.target = null;
     if (u.objective && (u.objective.dead || u.objective.owner === u.owner)) u.objective = null;
+    // validate harvest target: a tree that ran out while the worker was EN
+    // ROUTE used to leave hasOrder=true with a stale tx/tz, so the worker
+    // marched to a dead point and milled around it ("struggling to seek").
+    // Now: carrying goods -> go deliver; else nearby tree or clean idle.
+    if (u.type === 'worker' && u.harvestTarget && !this.resourceReady(u.harvestTarget)) {
+      u.harvestTarget = null; u.harvestManual = false;
+      if (u.carrying > 0 && !u.returning && !u.holdPosition && !u.assignedMill) {
+        const hq = this.hqOf(u.owner);
+        if (hq) {
+          const drop = this.hqDropSpot(hq, u);
+          u.returning = true; u.hasOrder = true; u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id; u.tx = drop.x; u.tz = drop.z; u.path = null;
+        }
+      } else if (!u.carrying && !u.returning && !u.holdPosition && !u.assignedMill) {
+        if (!this.reseekTree(u, 60)) { u.hasOrder = false; u.path = null; u.idleT = 0; }
+      } else if (!u.carrying) {
+        u.hasOrder = false; u.path = null;
+      }
+    }
     // resume original objective after breaching a wall
     if (!u.target && u.objective && u.type !== 'worker') {
       u.target = u.objective; u.objective = null;
       u.path = null; u.repathT = 0;
     }
 
-    // WORKER harvesting — wood from trees, stone from rocks, crystal nodes.
-    // Deposit routes by cargo type; Quarry doubles stone carry, Lumber/Depot speed returns.
-    const CARRY_BASE = CONFIG.resource?.carryMax ?? 10;
-    const carryOf = (unit) => {
-      if (unit?.cargo === 'stone' && this.nearOwnBuilding(unit.owner, unit.x, unit.z, 'quarry', 60)) return CARRY_BASE * 2;
-      return CARRY_BASE;
-    };
-    const CARRY = carryOf(u);
+    // WORKER harvesting — timber from trees, delivered as wood to the HQ.
+    const CARRY = CONFIG.resource?.carryMax ?? 10;
     if (u.type === 'worker' && u.harvestTarget && this.resourceReady(u.harvestTarget) && u.carrying < CARRY) {
       const n = u.harvestTarget;
-      if (Math.hypot(n.x - u.x, n.z - u.z) > n.radius + 1.6) { this.navigate(u, n.x, n.z, dt, n.radius + 1.6, 3.0); return; }
+      this.harvestAnchorFor(u, n);
+      const ax = u.hx ?? n.x, az = u.hz ?? n.z;
+      if (Math.hypot(n.x - u.x, n.z - u.z) > n.radius + 1.6) { this.navigate(u, ax, az, dt, 0.9, 3.0); return; }
       u.path = null;
       u.gathering += dt;
       if (u.gathering >= CONFIG.units.worker.harvestTime) {
         u.gathering = 0;
         const take = Math.min(CONFIG.units.worker.harvestRate, CARRY - u.carrying, n.amount);
         u.carrying += take; n.amount -= take;
-        u.cargo = n.rtype || 'tree';
-        if (n.rtype === 'rock') this.syncRock?.(n); else this.syncTree(n);
+        u.cargo = 'tree';
+        u.lastWoodX = n.x; u.lastWoodZ = n.z;
+        this.syncTree(n);
         this.burst(n.x, this.gy(n.x, n.z) + 1.5, n.z, 0x8b5a2b, 5, 2.5);
         this.burst(n.x, this.gy(n.x, n.z) + 2.4, n.z, 0x4ade80, 4, 2);
         if (n.amount <= 0) {
-          // chopped down -> stump, regrows after a while (never permanently gone).
           n.amount = 0;
           n.depleted = true;
-          if (n.rtype === 'rock') this.syncRock?.(n);
-          else {
-            const [rlo, rhi] = CONFIG.resource?.regrowTime ?? [55, 115];
-            n.regrowT = rlo + Math.random() * (rhi - rlo);
-            this.syncTree(n);
-          }
+          const [rlo, rhi] = CONFIG.resource?.regrowTime ?? [50, 100];
+          n.regrowT = rlo + Math.random() * (rhi - rlo);
+          this.syncTree(n);
           u.harvestTarget = null; u.harvestManual = false;
-          u.hasOrder = u.carrying > 0; u.returning = u.carrying > 0;
-          // node gone and hands empty: move straight to the next same-kind node
-          if (!u.carrying && !u.assignedMill && !u.holdPosition) {
-            const next = this.nearestResourceLike?.(u.x, u.z, n.rtype || 'tree', 90) || this.nearestResource(u.x, u.z);
-            if (next && next !== n && this.resourceReady(next)) {
-              u.harvestTarget = next; u.harvestManual = true; u.gathering = 0;
-              u.hasOrder = true; u.path = null;
+          if (u.carrying > 0) {
+            const hq = this.hqOf(u.owner);
+            if (hq) {
+              const drop = this.hqDropSpot(hq, u);
+              u.returning = true; u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id; u.tx = drop.x; u.tz = drop.z; u.path = null; u.hasOrder = true;
             }
+          } else if (!u.assignedMill && !u.holdPosition) {
+            this.reseekTree(u, 60);
+          }
+        } else if (u.carrying >= CARRY) {
+          const hq = this.hqOf(u.owner);
+          if (hq) {
+            const drop = this.hqDropSpot(hq, u);
+            u.returning = true; u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id; u.tx = drop.x; u.tz = drop.z; u.path = null; u.hasOrder = true;
           }
         }
-        if (u.carrying >= CARRY) { const hq = this.hqOf(u.owner); if (hq) { const drop = this.hqDropSpot(hq, u); u.returning = true; u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id; u.tx = drop.x; u.tz = drop.z; u.path = null; } }
       }
       return;
     }
-    // return cargo: explicit delivery runs only (returning flag). Stopped
-    // (holding) workers and re-tasked workers keep their logs until ordered.
+    // return cargo: smooth arrival at HQ without collider conflict
     if (u.type === 'worker' && u.carrying > 0 && !u.holdPosition && u.returning) {
       const hq = this.hqOf(u.owner);
       if (!hq) return;
-      if (u.dropFor !== hq.id) {
+      if (u.dropFor !== hq.id || u.dropX === undefined || u.dropX === null) {
         const drop = this.hqDropSpot(hq, u);
         u.dropX = drop.x; u.dropZ = drop.z; u.dropFor = hq.id; u.path = null;
       }
-      // The staged drop sits just outside the HQ footprint, past the old
-      // center-distance deposit ring — so hand over on drop arrival too.
-      const atDrop = u.dropX !== undefined && Math.hypot(u.dropX - u.x, u.dropZ - u.z) <= 1.2;
-      if (Math.hypot(hq.x - u.x, hq.z - u.z) > hq.radius + 0.9 && !atDrop) { this.navigate(u, u.dropX, u.dropZ, dt, 0.8, 3.0); return; }
+      const distToHQ = Math.hypot(hq.x - u.x, hq.z - u.z);
+      const atDrop = (u.dropX !== null && Math.hypot(u.dropX - u.x, u.dropZ - u.z) <= 2.2) || distToHQ <= hq.radius + 2.2;
+      if (!atDrop) {
+        this.navigate(u, u.dropX ?? hq.x, u.dropZ ?? hq.z, dt, 1.0, 2.5);
+        return;
+      }
       u.path = null;
       const pl = this.players[u.owner];
       const amt = u.carrying;
-      const cargo = u.cargo || u.harvestTarget?.rtype || 'tree';
-      if (cargo === 'rock' || cargo === 'stone') {
-        if (pl.stone !== undefined) pl.stone += amt; else pl.logs = (pl.logs ?? 0) + amt;
-      }
-      else if (cargo === 'crystal') {
-        if (pl.crystal !== undefined) pl.crystal += amt; else pl.logs = (pl.logs ?? 0) + amt;
-      }
-      else { if (pl.wood !== undefined) pl.wood += amt; pl.logs = (pl.logs ?? 0) + amt; if (pl.wood !== undefined) pl.logs = pl.wood; }
-      this.spawnFloat?.(u.x, u.z, `+${Math.round(amt)}`, cargo === 'rock' ? '#9aa0a8' : cargo === 'crystal' ? '#7de8ff' : '#4ade80');
+      if (pl.wood !== undefined) pl.wood += amt;
+      pl.logs = (pl.logs ?? 0) + amt;
+      if (pl.wood !== undefined) pl.logs = pl.wood;
+      this.spawnFloat?.(u.x, u.z, `+${Math.round(amt)}🪵`, '#4ade80');
       u.carrying = 0; u.returning = false; u.cargo = null;
-      // delivery complete: chain the next load automatically (all kingdoms),
-      // same resource kind, so workers labour continuously until stopped.
-      // Mill hands and holding workers are exempt — they stay at their post.
-      u.harvestTarget = null; u.harvestManual = false; u.hasOrder = false;
-      if (!u.assignedMill && !u.holdPosition) {
-        const next = this.nearestResourceLike?.(u.x, u.z, cargo === 'rock' ? 'rock' : cargo === 'crystal' ? 'crystal' : 'tree', 90)
-          || this.nearestResource(u.x, u.z);
-        if (next && this.resourceReady(next)) {
-          u.harvestTarget = next; u.harvestManual = true; u.gathering = 0;
-          u.hasOrder = true; u.path = null; u.idleT = 0;
-        }
-      }
       u.dropX = null; u.dropZ = null; u.dropFor = null;
       u.idleT = 0;
+      u.harvestTarget = null; u.harvestManual = false; u.hasOrder = false;
+
+      // Delivery complete: automatically return to harvesting!
+      // Try searching near where they were previously chopping first, then around HQ
+      if (!u.assignedMill && !u.holdPosition) {
+        let found = false;
+        if (u.lastWoodX !== undefined && u.lastWoodZ !== undefined) {
+          const nearOld = this.nearestResourceLike(u.lastWoodX, u.lastWoodZ, 'tree', 50);
+          if (nearOld && this.resourceReady(nearOld)) {
+            u.harvestTarget = nearOld;
+            u.harvestManual = true;
+            u.gathering = 0;
+            u.hasOrder = true;
+            u.returning = false;
+            u.path = null;
+            this.harvestAnchorFor(u, nearOld);
+            u.tx = u.hx ?? nearOld.x;
+            u.tz = u.hz ?? nearOld.z;
+            found = true;
+          }
+        }
+        if (!found) {
+          this.reseekTree(u, 75);
+        }
+      }
       return;
     }
 
@@ -2546,9 +2753,17 @@ export class Game {
           return;
         }
         // IN RANGE: anchor feet and shoot. No steering / no path here = no dance.
+        // Soft leash, not a hard snap: resolveOverlaps may nudge a firing
+        // unit a few cm; yanking it back to the exact millimetre every frame
+        // read as high-frequency jitter down the whole firing line. Only
+        // correct drifts beyond 0.5m, and never touch the path cache keys
+        // while planted (that polluted findPath sharing for movers).
         if (!u.fireAnchor) u.fireAnchor = { x: u.x, z: u.z };
-        else { u.x = u.fireAnchor.x; u.z = u.fireAnchor.z; }
-        u.path = null; u.pathTx = t.x; u.pathTz = t.z; u.repathT = 0.5;
+        else {
+          const ax = u.fireAnchor.x - u.x, az = u.fireAnchor.z - u.z;
+          if (Math.hypot(ax, az) > 0.5) { u.x = u.fireAnchor.x; u.z = u.fireAnchor.z; }
+        }
+        u.path = null; u.repathT = 0.5;
         // target kited out of hysteresis band -> release anchor and chase
         if (d > attackR + 1.5) { u.fireAnchor = null; return; }
         u.hasOrder = u.attackMove; // attack-move keeps marching after the kill
@@ -2628,7 +2843,11 @@ export class Game {
       const soft = a.type === 'worker' && b.type === 'worker' && a.owner === b.owner;
       const min = (a.radius + b.radius + 0.12) * (soft ? 0.55 : 1);
       if (d < min && d > 0.0001) {
-        const push = (min - d) * (soft ? 0.25 : 1);
+        // damped: resolve only a fraction per pass. The old full-overlap
+        // shove (1.0) teleported melee lines up to ~0.5m in ONE frame, then
+        // steering drove them back the next -> army-wide buzzing. Two gentle
+        // passes converge without the snap.
+        const push = (min - d) * (soft ? 0.25 : 0.5);
         const nx = dx / d, nz = dz / d;
         const aAnch = !!a.fireAnchor || (a.lastShotT ?? 99) < 0.4;
         const bAnch = !!b.fireAnchor || (b.lastShotT ?? 99) < 0.4;
@@ -2691,15 +2910,21 @@ export class Game {
       u.x = THREE.MathUtils.clamp(u.x, -H, H);
       u.z = THREE.MathUtils.clamp(u.z, -H, H);
     }
-    // rebuild grid from current positions, then relax (single rebuild:
-    // positions only move a few cm per frame, so one pass is enough)
+    // rebuild grid from current positions, then relax.
+    // One pass when degraded (perf mode), two otherwise — the second pass
+    // only matters for dense crowds and costs a full neighbor sweep.
     this.rebuildGrid();
-    for (let pass = 0; pass < 2; pass++) {
+    const isTouch = typeof window !== 'undefined' && ((window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || (navigator?.maxTouchPoints ?? 0) > 0);
+    const passes = (this.perf.level > 0 || isTouch) ? 1 : 2;
+    for (let pass = 0; pass < passes; pass++) {
       const seen = new Set();
       for (const [, arr] of this.unitGrid) {
         for (const i of arr) {
           const a = this.units[i];
           if (!a || a.dead) continue;
+          // stationary mill hands / holders barely move: skip their sweep,
+          // they only need to BE pushed, not to push others every frame
+          if (!a.hasOrder && !a.target && (a.assignedMill || a.holdPosition)) continue;
           this.eachNear(a.x, a.z, 2.5, (b) => {
             if (b === a) return;
             const k = a.id < b.id ? a.id * 100000 + b.id : b.id * 100000 + a.id;
@@ -2959,14 +3184,19 @@ export class Game {
     let dx = wx - u.x, dz = wz - u.z;
     const d = Math.hypot(dx, dz) || 1;
     dx /= d; dz /= d;
-    // separation via spatial grid: movers flow around standers
+    // separation via spatial grid: movers flow around standers.
+    // Collider contract (must match resolveOverlaps): personal space is
+    // radius-sum + 0.35, NOT +0.9. The old +0.9 pad told steering to hold
+    // 2.3m between two workers while the resolver was happy at 0.84m, so
+    // steer pushed apart exactly what navigate drove together -> the
+    // endless harvest/mill/drop-point shiver.
     let sx = 0, sz = 0;
     this.eachNear(u.x, u.z, 2.5, (o) => {
       if (o === u || o.dead) return;
       const ox = u.x - o.x, oz = u.z - o.z;
       if (Math.abs(ox) > 2.5 || Math.abs(oz) > 2.5) return;
       const od = Math.hypot(ox, oz);
-      const min = u.radius + o.radius + 0.9;
+      const min = u.radius + o.radius + 0.35;
       if (od < min && od > 0.001) {
         // anchored/firing units are "heavy": movers steer harder around them
         const heavy = (o.fireAnchor || (o.lastShotT ?? 99) < 0.4) ? 1.8 : 1.0;
@@ -2974,17 +3204,22 @@ export class Game {
         sx += (ox / od) * f; sz += (oz / od) * f;
       }
     });
-    // in combat only damp separation at very close range; never fully off
-    // (full-off was letting units stack inside each other while chasing)
-    // separation falls off with distance to the waypoint: units flow smoothly
-    // over open ground (0.7x) and only spread hard near arrival (1.4x), so
-    // crowds stop jittering in place while still never stacking on arrival.
-    const sepK = combat && d <= 3 ? 0.9 : d > 12 ? 0.7 : 1.4;
+    // Separation fades INSIDE the arrival zone (last ~1.2m): units must be
+    // allowed to settle onto their slot/anchor instead of orbiting it.
+    // Old code did the opposite (1.4x near arrival) which is why squads
+    // paced in circles "walking in the same place" at every destination.
+    // In combat keep a whisper of separation so chasers don't stack.
+    const arriveFade = THREE.MathUtils.clamp((d - 0.6) / 1.2, combat ? 0.25 : 0, 1);
+    const cruiseK = d > 12 ? 0.7 : 1.0;
+    const sepK = cruiseK * arriveFade;
     let vx = dx + sx * sepK;
     let vz = dz + sz * sepK;
     const vl = Math.hypot(vx, vz) || 1;
     vx /= vl; vz /= vl;
-    const step = Math.min(Math.min(u.speed, u.moveCap || u.speed) * dt, d);
+    // arrival slowdown: full speed on open ground, ease into the last ~1.5m
+    // so units don't overshoot → oscillate → jitter around the goal.
+    const ease = THREE.MathUtils.clamp(d / 1.5, 0.3, 1);
+    const step = Math.min(Math.min(u.speed, u.moveCap || u.speed) * ease * dt, d);
     let nx = u.x + vx * step, nz = u.z + vz * step;
     // slide around terrain/buildings: try full step, then left/right deflects
     const blocked = (px, pz) => {
@@ -3058,8 +3293,21 @@ export class Game {
     u.repathT = (u.repathT ?? 0) - dt;
     const moved = Math.hypot(tx - (u.pathTx ?? 1e9), tz - (u.pathTz ?? 1e9));
     if (!u.path || moved > 3 || u.repathT <= 0) {
+      // global A* budget: at most a few full pathfinds per frame. Overflowed
+      // units steer direct this frame and retry shortly — this turns the
+      // "order 12 workers = 12 A* in one frame = hitch = perf mode" spike
+      // into a smooth trickle with no visible difference.
+      if ((this._pathBudget ?? 0) <= 0 && (u.path === undefined || u.path === null)) {
+        u.repathT = 0.15 + ((u.id || 0) % 5) * 0.05;
+        if (this.losClear(u.x, u.z, tx, tz, u.radius)) this.steer(u, tx, tz, dt, !!u.target);
+        else this.blockedDetour(u, tx, tz, dt);
+        return 'moving';
+      }
+      this._pathBudget = (this._pathBudget ?? 0) - 1;
       const res = this.findPath(u.x, u.z, tx, tz, u.radius);
-      u.pathTx = tx; u.pathTz = tz; u.repathT = repathEvery;
+      u.pathTx = tx; u.pathTz = tz;
+      // stagger repaths by unit id so a whole squad never repaths same frame
+      u.repathT = repathEvery + ((u.id || 0) % 5) * 0.12;
       if (res === null) return this.blockedDetour(u, tx, tz, dt) ? 'moving' : 'blocked';
       u.path = res.length ? res : null; // [] is truthy — normalize to null
       if (!u.path) {
@@ -3077,13 +3325,18 @@ export class Game {
       return 'moving';
     }
     let head = u.path[0];
-    if (Math.hypot(head.x - u.x, head.z - u.z) < 2.2) {
+    // pop waypoints only when genuinely close: the old fixed 2.2m pop cut
+    // corners through building gaps the path deliberately routed around,
+    // then the building eject shoved back -> zigzag on every approach.
+    const popR = Math.max(1.4, arriveR * 2);
+    if (Math.hypot(head.x - u.x, head.z - u.z) < popR) {
       u.path.shift();
       head = u.path[0];
       if (!head) { u.path = null; return dd <= arriveR + 1.2 ? 'arrived' : 'moving'; }
     }
-    // final approach straight in when visible and close
-    if (dd <= Math.max(arriveR, 4) && this.losClear(u.x, u.z, tx, tz, u.radius)) {
+    // final approach straight in only when very close and visible; past
+    // this point the path head leads so units don't slice corners off
+    if (dd <= Math.max(arriveR, 2.5) && this.losClear(u.x, u.z, tx, tz, u.radius)) {
       this.steer(u, tx, tz, dt, !!u.target);
       return dd <= arriveR ? 'arrived' : 'moving';
     }
