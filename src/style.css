@@ -803,7 +803,7 @@ html:not(.want-landscape) #boot-gate { visibility: visible; }
 }
 .mode-card:hover, .mode-card:focus-visible { transform: translateY(-3px); border-color: #fbbf24; box-shadow: 0 12px 40px rgba(251,191,36,.25); outline: none; }
 .mode-card:active { transform: scale(.97); }
-.mode-thumb { width: 100%; height: auto; border-radius: 12px; display: block; }
+.mode-thumb { width: 100%; height: auto; border-radius: 12px; display: block; aspect-ratio: 16/9; object-fit: cover; background: #0b1220; }
 .mode-name { display: block; margin-top: 10px; font-weight: 900; font-size: 18px; }
 .mode-desc { display: block; margin-top: 2px; color: #94a3b8; font-size: 13px; }
 .mode-foot { margin-top: 14px; color: #64748b; font-size: 12px; }
