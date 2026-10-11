@@ -811,5 +811,19 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   void n4;
 }
 
+// ---------- 24. multiplayer rooms directory ----------
+{
+  const R = await import('./src/rooms.js');
+  R._clearRooms();
+  ok('room names are required', !!R.createRoom('  ').error);
+  const a = R.createRoom('Crown Clash');
+  ok('open room created', !!a.room && !a.room.locked);
+  const b = R.createRoom('Secret War', 's3cr3t');
+  ok('locked room hides its password', !!b.room && b.room.locked && b.room.pass !== 's3cr3t');
+  ok('search filters rooms', R.searchRooms('crown').length === 1 && R.searchRooms('').length === 2);
+  ok('locked join needs the password', !!R.joinRoom(b.room.id).error && !!R.joinRoom(b.room.id, 'nope').error && !!R.joinRoom(b.room.id, 's3cr3t').room);
+  R._clearRooms();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -4,6 +4,7 @@ import { AIManager } from './ai.js';
 import { HUD } from './ui.js';
 import { installRealms } from './realms.js';
 import { installWar } from './war.js';
+import { listRooms, searchRooms, createRoom, joinRoom } from './rooms.js';
 import { loadWorkerModels, loadAdventurerModels } from './workers3d.js';
 import { loadBuildingModels } from './buildings3d.js';
 
@@ -239,14 +240,29 @@ async function boot() {
     }
   }
   setBoot(100);
-  // CoC rule: enter the game ONLY at 100%. Fade the splash, then start loop.
-  const finishBoot = () => {
+  // Mode select at 100%: the world is built behind the menu (one painted
+  // frame as backdrop), and the loop only starts for single player.
+  let loopStarted = false;
+  const startLoop = () => {
+    if (loopStarted) return;
+    loopStarted = true;
+    loop();
+  };
+  const showModes = () => {
     unmuteMusic();
     try { bgMusic?.play()?.catch?.(() => {}); } catch {}
     bootGate?.classList.add('done');
     setTimeout(() => bootGate?.remove(), 500);
-    loop();
+    try {
+      game.update(0.016);
+      ai.update(0.016);
+      hud.frame(0.016);
+      game.render();
+    } catch (err) { console.warn('menu backdrop', err); }
+    document.getElementById('mode-select')?.classList.remove('hidden');
   };
+  const finishBoot = () => showModes();
+  wireMenu({ game, getHud: () => hud, startLoop });
   // Autoplay policy: music already loops muted from the splash; if still
   // paused at 100%, one tap unlocks sound + enters (no earlier entry).
   const needTap = !!bgMusic && bgMusic.paused && musicReady;
@@ -262,4 +278,142 @@ async function boot() {
     setTimeout(finishBoot, 450);
   }
 }
+// ---------- menu flow: mode select -> single player | rooms -> lobby -----
+function wireMenu({ game, getHud, startLoop }) {
+  const $ = (id) => document.getElementById(id);
+  const show = (el) => el?.classList.remove('hidden');
+  const hide = (el) => el?.classList.add('hidden');
+  const buzz = (ms = 10) => { try { navigator.vibrate?.(ms); } catch {} };
+
+  const modeSel = $('mode-select'), roomsScr = $('rooms-screen');
+  const crModal = $('create-room-modal'), lobbyScr = $('lobby-screen');
+
+  // single player: enter the 12-kingdom saga
+  $('mode-single')?.addEventListener('click', () => {
+    hide(modeSel);
+    document.body.classList.remove('in-menu');
+    buzz(15);
+    try { bgMusic?.play?.()?.catch?.(() => {}); } catch {}
+    startLoop();
+    game.hookMsg('⚔️ Single player — you vs 11 AI kingdoms. Expand, wall, conquer!');
+  });
+  // multiplayer: available rooms
+  $('mode-multi')?.addEventListener('click', () => {
+    hide(modeSel); show(roomsScr);
+    renderRooms('');
+    $('rooms-search').value = '';
+    buzz(10);
+  });
+  $('btn-rooms-back')?.addEventListener('click', () => {
+    hide(roomsScr); show(modeSel);
+  });
+
+  // ---- rooms list + search ----
+  const renderRooms = (q) => {
+    const list = $('rooms-list');
+    if (!list) return;
+    const rooms = searchRooms(q);
+    $('rooms-count').textContent = `${rooms.length} room${rooms.length === 1 ? '' : 's'} open`;
+    list.innerHTML = '';
+    if (!rooms.length) {
+      const d = document.createElement('div');
+      d.className = 'rooms-empty';
+      d.textContent = q ? `No rooms match “${q}”.` : 'No open rooms — create one!';
+      list.appendChild(d);
+      return;
+    }
+    for (const r of rooms) {
+      const row = document.createElement('div');
+      row.className = 'room-row';
+      const info = document.createElement('div');
+      info.className = 'rr-info';
+      const nm = document.createElement('div');
+      nm.className = 'rr-name';
+      nm.textContent = `${r.locked ? '🔒 ' : '🌐 '}${r.name}`;
+      const sub = document.createElement('div');
+      sub.className = 'rr-sub';
+      sub.textContent = `${r.players}/${r.max} players`;
+      info.append(nm, sub);
+      const join = document.createElement('button');
+      join.className = 'rr-join';
+      join.type = 'button';
+      join.textContent = 'Join';
+      join.onclick = () => tryJoin(r.id);
+      row.append(info, join);
+      list.appendChild(row);
+    }
+  };
+  $('rooms-search')?.addEventListener('input', (e) => renderRooms(e.target.value));
+
+  const tryJoin = (id) => {
+    const rooms = listRooms();
+    const r = rooms.find((x) => x.id === id);
+    if (!r) { renderRooms($('rooms-search')?.value || ''); return; }
+    let pass = '';
+    if (r.locked) {
+      pass = window.prompt(`🔒 “${r.name}” needs a password:`, '') ?? '';
+      if (pass === null) return;
+    }
+    const res = joinRoom(id, pass);
+    if (res.error) {
+      window.alert(res.error);
+      return;
+    }
+    openLobby(res.room);
+    buzz(12);
+  };
+
+  // ---- create room popup ----
+  $('btn-create-room')?.addEventListener('click', () => {
+    $('cr-name').value = '';
+    $('cr-pass').value = '';
+    $('cr-error')?.classList.add('hidden');
+    show(crModal);
+    setTimeout(() => $('cr-name')?.focus(), 50);
+  });
+  $('btn-cr-cancel')?.addEventListener('click', () => hide(crModal));
+  crModal?.addEventListener('click', (e) => { if (e.target === crModal) hide(crModal); });
+  $('btn-cr-create')?.addEventListener('click', () => {
+    const res = createRoom($('cr-name')?.value || '', $('cr-pass')?.value || '');
+    if (res.error) {
+      const er = $('cr-error');
+      if (er) { er.textContent = res.error; er.classList.remove('hidden'); }
+      return;
+    }
+    hide(crModal);
+    renderRooms($('rooms-search')?.value || '');
+    openLobby(res.room);
+    buzz(15);
+  });
+
+  // ---- lobby ----
+  const openLobby = (room) => {
+    hide(roomsScr);
+    $('lobby-name').textContent = `${room.locked ? '🔒 ' : '🌐 '}${room.name}`;
+    $('lobby-sub').textContent = `Room • ${room.players}/${room.max} players`;
+    const mem = $('lobby-members');
+    if (mem) {
+      mem.innerHTML = '';
+      const you = document.createElement('div');
+      you.className = 'member-row';
+      you.innerHTML = `♛ <span>You (host)</span><span class="m-you">YOU</span>`;
+      const foe = document.createElement('div');
+      foe.className = 'member-row';
+      foe.innerHTML = `❔ <span>Open slot</span><span class="m-wait">Waiting for opponent…</span>`;
+      mem.append(you, foe);
+    }
+    show(lobbyScr);
+    game.hookMsg?.(`🌐 Room “${room.name}” reserved — waiting for a rival lord.`);
+  };
+  $('btn-lobby-leave')?.addEventListener('click', () => {
+    hide(lobbyScr); show(roomsScr);
+    renderRooms($('rooms-search')?.value || '');
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (crModal && !crModal.classList.contains('hidden')) hide(crModal);
+    }
+  });
+}
+
 boot();

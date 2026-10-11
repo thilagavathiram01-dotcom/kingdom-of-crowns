@@ -21,7 +21,7 @@
     } catch (e) {}
   </script>
 </head>
-<body>
+<body class="in-menu">
   <div id="app">
     <canvas id="game-canvas"></canvas>
 
@@ -53,6 +53,132 @@
         <p>War of Crowns is a <b>landscape</b> strategy game.<br />Turn your phone or tablet sideways to continue.</p>
         <button id="btn-rotate" type="button">Rotate now</button>
         <p class="rotate-hint">No auto-rotate? Lock rotation manually from your browser or system settings.</p>
+      </div>
+    </div>
+
+
+    <!-- Mode select: after loading, pick how to play (landscape) -->
+    <div id="mode-select" class="hidden" aria-live="polite">
+      <div class="mode-wrap">
+        <div class="mode-head">
+          <div class="mode-crown">♛</div>
+          <h1>WAR OF CROWNS</h1>
+          <p>Choose your battlefield</p>
+        </div>
+        <div class="mode-cards">
+          <button id="mode-single" class="mode-card" type="button">
+            <svg class="mode-thumb" viewBox="0 0 320 180" role="img" aria-label="Single player thumbnail">
+              <defs>
+                <linearGradient id="sp-sky" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#1a2a5e"/><stop offset=".62" stop-color="#274b73"/><stop offset="1" stop-color="#3f6212"/>
+                </linearGradient>
+                <linearGradient id="sp-gold" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#fde68a"/><stop offset="1" stop-color="#b45309"/>
+                </linearGradient>
+              </defs>
+              <rect width="320" height="180" fill="url(#sp-sky)"/>
+              <circle cx="262" cy="34" r="16" fill="#fde68a" opacity=".9"/>
+              <ellipse cx="160" cy="168" rx="190" ry="34" fill="#4d7c0f"/>
+              <ellipse cx="160" cy="160" rx="150" ry="24" fill="#65a30d"/>
+              <path d="M40 150 L40 96 L52 96 L52 84 L60 84 L60 96 L72 96 L72 150 Z" fill="#94a3b8"/>
+              <path d="M248 150 L248 96 L260 96 L260 84 L268 84 L268 96 L280 96 L280 150 Z" fill="#94a3b8"/>
+              <path d="M132 152 V86 h6 V74 h10 V62 h24 V74 h10 V86 h6 V152 Z" fill="#cbd5e1"/>
+              <path d="M132 86 h56 l-8 14 h-40 Z" fill="#2f6fed"/>
+              <rect x="150" y="112" width="20" height="40" rx="9" fill="#3f2d1c"/>
+              <rect x="154" y="118" width="12" height="34" rx="6" fill="#92400e"/>
+              <circle cx="160" cy="48" r="15" fill="none" stroke="url(#sp-gold)" stroke-width="6"/>
+              <path d="M160 28 l4 8 8 1 -6 6 2 9 -8 -5 -8 5 2 -9 -6 -6 8 -1 Z" fill="url(#sp-gold)"/>
+              <path d="M96 60 l3 -9 3 9 9 3 -9 3 -3 9 -3 -9 -9 -3 Z" fill="#fde68a" opacity=".8"/>
+              <path d="M228 78 l2 -7 2 7 7 2 -7 2 -2 7 -2 -7 -7 -2 Z" fill="#fde68a" opacity=".7"/>
+            </svg>
+            <span class="mode-name">⚔️ Single Player</span>
+            <span class="mode-desc">You vs 11 AI kingdoms</span>
+          </button>
+          <button id="mode-multi" class="mode-card" type="button">
+            <svg class="mode-thumb" viewBox="0 0 320 180" role="img" aria-label="Multiplayer thumbnail">
+              <defs>
+                <linearGradient id="mp-sky" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#450a0a"/><stop offset=".6" stop-color="#7c2d12"/><stop offset="1" stop-color="#1c1917"/>
+                </linearGradient>
+                <linearGradient id="mp-steel" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0" stop-color="#e2e8f0"/><stop offset="1" stop-color="#64748b"/>
+                </linearGradient>
+              </defs>
+              <rect width="320" height="180" fill="url(#mp-sky)"/>
+              <ellipse cx="160" cy="168" rx="190" ry="34" fill="#292524"/>
+              <circle cx="160" cy="150" r="46" fill="none" stroke="#ef4444" stroke-width="3" opacity=".55"/>
+              <circle cx="160" cy="150" r="34" fill="none" stroke="#ef4444" stroke-width="2" opacity=".4"/>
+              <g transform="rotate(24 160 110)">
+                <rect x="154" y="30" width="12" height="120" rx="6" fill="url(#mp-steel)"/>
+                <rect x="136" y="42" width="48" height="10" rx="5" fill="#92400e"/>
+                <circle cx="160" cy="158" r="9" fill="#fbbf24"/>
+              </g>
+              <g transform="rotate(-24 160 110)">
+                <rect x="154" y="30" width="12" height="120" rx="6" fill="url(#mp-steel)"/>
+                <rect x="136" y="42" width="48" height="10" rx="5" fill="#1e3a8a"/>
+                <circle cx="160" cy="158" r="9" fill="#60a5fa"/>
+              </g>
+              <path d="M160 96 l6 12 13 2 -9 9 2 13 -12 -6 -12 6 2 -13 -9 -9 13 -2 Z" fill="#fbbf24"/>
+              <path d="M52 44 l2 -7 2 7 7 2 -7 2 -2 7 -2 -7 -7 -2 Z" fill="#fca5a5" opacity=".8"/>
+              <path d="M268 52 l2 -7 2 7 7 2 -7 2 -2 7 -2 -7 -7 -2 Z" fill="#fca5a5" opacity=".8"/>
+            </svg>
+            <span class="mode-name">🛡️ Multiplayer</span>
+            <span class="mode-desc">Rooms · face rival lords</span>
+          </button>
+        </div>
+        <p class="mode-foot">Landscape recommended · sound on for war horns 🔊</p>
+      </div>
+    </div>
+
+    <!-- Multiplayer: available rooms -->
+    <div id="rooms-screen" class="hidden" aria-live="polite">
+      <div class="rooms-wrap">
+        <div class="rooms-head">
+          <button id="btn-rooms-back" class="icon-circle" type="button" aria-label="Back">‹</button>
+          <div>
+            <h2>Available Rooms</h2>
+            <p id="rooms-count">0 rooms open</p>
+          </div>
+          <button id="btn-create-room" type="button">＋ Create Room</button>
+        </div>
+        <div class="rooms-search">
+          <input id="rooms-search" type="search" placeholder="🔍 Search rooms…" autocomplete="off" />
+        </div>
+        <div id="rooms-list"></div>
+      </div>
+    </div>
+
+    <!-- Create room popup -->
+    <div id="create-room-modal" class="hidden" aria-live="assertive">
+      <div class="cr-card">
+        <h2>＋ Create Room</h2>
+        <label>Room name
+          <input id="cr-name" type="text" maxlength="24" placeholder="e.g. Crown Clash" autocomplete="off" />
+        </label>
+        <label>Password <span class="opt">(optional)</span>
+          <input id="cr-pass" type="password" maxlength="24" placeholder="Leave empty for open room" autocomplete="off" />
+        </label>
+        <p id="cr-error" class="cr-error hidden"></p>
+        <div class="cr-btns">
+          <button id="btn-cr-cancel" type="button">Cancel</button>
+          <button id="btn-cr-create" type="button">Create &amp; Enter</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Room lobby -->
+    <div id="lobby-screen" class="hidden" aria-live="polite">
+      <div class="lobby-wrap">
+        <div class="rooms-head">
+          <button id="btn-lobby-leave" class="icon-circle" type="button" aria-label="Leave">‹</button>
+          <div>
+            <h2 id="lobby-name">Room</h2>
+            <p id="lobby-sub">Waiting for opponent…</p>
+          </div>
+        </div>
+        <div id="lobby-members"></div>
+        <p class="lobby-note">🛡️ Online battles ride on the relay server — this room is reserved on your device and goes live with it.</p>
+        <button id="btn-lobby-start" type="button" disabled>Waiting for opponent…</button>
       </div>
     </div>
 

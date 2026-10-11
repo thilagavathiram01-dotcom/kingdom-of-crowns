@@ -783,3 +783,99 @@ html:not(.want-landscape) #boot-gate { visibility: visible; }
 }
 #btn-ch-accept { background: linear-gradient(180deg, #ef4444, #991b1b); color: #fff; }
 #btn-ch-reject { background: linear-gradient(180deg, #334155, #1e293b); color: #e2e8f0; border: 1px solid #475569; }
+
+/* ---------- mode select / rooms / lobby (landscape-first menu flow) ---------- */
+#mode-select, #rooms-screen, #lobby-screen {
+  position: absolute; inset: 0; z-index: 45; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(120% 100% at 50% 0%, #16213c 0%, #0b0e14 70%);
+  padding: 16px; overflow-y: auto;
+}
+.mode-wrap { width: min(760px, 96vw); text-align: center; }
+.mode-head .mode-crown { font-size: 54px; filter: drop-shadow(0 4px 14px rgba(251,191,36,.5)); }
+.mode-head h1 { margin: 4px 0 2px; font-size: clamp(26px, 5vw, 44px); letter-spacing: .12em; color: #fde68a; }
+.mode-head p { margin: 0 0 16px; color: #94a3b8; font-size: 14px; letter-spacing: .06em; }
+.mode-cards { display: flex; gap: 16px; justify-content: center; }
+.mode-card {
+  flex: 1 1 0; max-width: 340px; background: rgba(17,24,39,.92); border: 1px solid rgba(148,163,184,.25);
+  border-radius: 20px; padding: 12px; cursor: pointer; color: #e5e7eb; text-align: center;
+  transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+  font-family: inherit; touch-action: manipulation;
+}
+.mode-card:hover, .mode-card:focus-visible { transform: translateY(-3px); border-color: #fbbf24; box-shadow: 0 12px 40px rgba(251,191,36,.25); outline: none; }
+.mode-card:active { transform: scale(.97); }
+.mode-thumb { width: 100%; height: auto; border-radius: 12px; display: block; }
+.mode-name { display: block; margin-top: 10px; font-weight: 900; font-size: 18px; }
+.mode-desc { display: block; margin-top: 2px; color: #94a3b8; font-size: 13px; }
+.mode-foot { margin-top: 14px; color: #64748b; font-size: 12px; }
+@media (max-aspect-ratio: 1/1) {
+  .mode-cards { flex-direction: column; align-items: center; }
+  .mode-card { width: min(340px, 92vw); }
+}
+
+.rooms-wrap, .lobby-wrap { width: min(560px, 94vw); max-height: 92vh; display: flex; flex-direction: column; }
+.rooms-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.rooms-head h2 { margin: 0; font-size: 22px; color: #fde68a; }
+.rooms-head p { margin: 2px 0 0; color: #94a3b8; font-size: 12px; }
+.rooms-head .icon-circle { flex-shrink: 0; }
+#btn-create-room {
+  margin-left: auto; padding: 11px 16px; border-radius: 12px; border: 0; font-weight: 900; font-size: 14px;
+  background: linear-gradient(180deg, #4ade80, #22c55e); color: #052e16; cursor: pointer; min-height: 46px;
+  touch-action: manipulation; white-space: nowrap;
+}
+#btn-create-room:active { transform: scale(.95); }
+.rooms-search input {
+  width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 12px; font-size: 15px;
+  background: rgba(17,24,39,.9); border: 1px solid rgba(148,163,184,.3); color: #e5e7eb; margin-bottom: 10px;
+}
+#rooms-list { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; -webkit-overflow-scrolling: touch; }
+.room-row {
+  display: flex; align-items: center; gap: 10px; background: rgba(17,24,39,.9);
+  border: 1px solid rgba(148,163,184,.22); border-radius: 14px; padding: 12px 14px;
+}
+.room-row .rr-info { flex: 1; min-width: 0; }
+.room-row .rr-name { font-weight: 800; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.room-row .rr-sub { color: #94a3b8; font-size: 12px; margin-top: 2px; }
+.room-row .rr-join {
+  padding: 10px 18px; border-radius: 10px; border: 0; font-weight: 900; font-size: 14px;
+  background: linear-gradient(180deg, #60a5fa, #2563eb); color: #fff; cursor: pointer; min-height: 44px;
+  touch-action: manipulation; flex-shrink: 0;
+}
+.room-row .rr-join:active { transform: scale(.94); }
+.rooms-empty { text-align: center; color: #64748b; padding: 26px 10px; font-size: 14px; }
+
+#create-room-modal {
+  position: absolute; inset: 0; z-index: 56; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.62); backdrop-filter: blur(4px); padding: 18px;
+}
+.cr-card { width: min(380px, 94vw); background: #101828; border: 1px solid rgba(148,163,184,.3); border-radius: 20px; padding: 22px; }
+.cr-card h2 { margin: 0 0 12px; color: #fde68a; font-size: 20px; }
+.cr-card label { display: block; font-size: 13px; font-weight: 700; color: #cbd5e1; margin-bottom: 12px; }
+.cr-card label .opt { font-weight: 400; color: #64748b; }
+.cr-card input {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 6px; padding: 12px; border-radius: 10px;
+  font-size: 15px; background: #0b1220; border: 1px solid rgba(148,163,184,.3); color: #fff;
+}
+.cr-error { color: #fca5a5; font-size: 13px; min-height: 0; margin: 0 0 8px; }
+.cr-btns { display: flex; gap: 10px; margin-top: 4px; }
+.cr-btns button { flex: 1; padding: 13px; border-radius: 12px; font-weight: 900; font-size: 15px; cursor: pointer; min-height: 50px; touch-action: manipulation; }
+#btn-cr-cancel { background: #1e293b; color: #e2e8f0; border: 1px solid #475569; }
+#btn-cr-create { background: linear-gradient(180deg, #4ade80, #22c55e); color: #052e16; border: 0; }
+
+.lobby-wrap .rooms-head { margin-bottom: 8px; }
+#lobby-members { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.member-row {
+  display: flex; align-items: center; gap: 10px; background: rgba(17,24,39,.9);
+  border: 1px solid rgba(148,163,184,.22); border-radius: 12px; padding: 12px 14px; font-weight: 700;
+}
+.member-row .m-you { margin-left: auto; font-size: 11px; font-weight: 900; color: #052e16; background: #4ade80; border-radius: 8px; padding: 3px 8px; }
+.member-row .m-wait { margin-left: auto; font-size: 12px; color: #94a3b8; }
+.lobby-note { color: #94a3b8; font-size: 13px; line-height: 1.5; }
+#btn-lobby-start {
+  padding: 14px; border-radius: 13px; border: 0; font-weight: 900; font-size: 16px; min-height: 54px;
+  background: #1e293b; color: #64748b; cursor: not-allowed;
+}
+
+/* menu state: hide the war HUD until single player starts */
+body.in-menu #topbar, body.in-menu #bottombar, body.in-menu #touchbar,
+body.in-menu #rail-tab, body.in-menu #message-feed, body.in-menu #selection-box,
+body.in-menu #order-banner { display: none !important; }
