@@ -20,6 +20,7 @@ function fakeGame() {
   g.buildings = [];
   g.selected = [];
   g.particles = [];
+  g.projectiles = [];
   g.obstacles = [];
   g.resources = [];
   g.terrain = null;
@@ -758,6 +759,56 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   ok('demolish raid launches at an intruder structure',
     !!brain.wave && brain.wave.kind === 'demolish' && brain.intrusions.has(brain.wave.objective?.id),
     `wave=${brain.wave?.kind} obj=${brain.wave?.objective?.id}`);
+}
+
+// ---------- 23. readable melee + real arrows/spears, shared caches ----------
+{
+  const g = fakeGame();
+  g.spawnPing = () => {};
+  g.time = 0;
+  g.players.k0 = { id: 'k0', idx: 0, logs: 500, wood: 500, food: 500, alive: true, color: 1, name: 'A' };
+  g.players.k1 = { id: 'k1', idx: 1, logs: 500, wood: 500, food: 500, alive: true, color: 2, name: 'B' };
+  g.humanId = 'kx'; // all-AI vision: no fog gating in headless combat checks
+  const { buildTrooper, troopCacheStats } = await import('./src/troops3d.js');
+  for (const t of ['soldier', 'swordsman', 'spearman', 'archer', 'knight', 'scout', 'healer', 'spy']) {
+    buildTrooper(t, 7);
+  }
+  const cs = troopCacheStats();
+  ok('trooper meshes/materials are shared, not per-unit', cs.geos < 150 && cs.mats < 25, JSON.stringify(cs));
+  // melee infantry fight point-blank, not at gun range
+  const { CONFIG: CFG } = await import('./src/config.js');
+  ok('swords flex in melee distance', CFG.units.swordsman.range <= 2.5 && CFG.units.soldier.range <= 2.5
+    && CFG.units.spearman.range <= 3.0 && CFG.units.knight.range <= 2.5);
+  // swordsman: slash arc + instant edge (no tracer spam)
+  const sw = g.spawnUnit('swordsman', 'k0', 0, 0);
+  const foe = g.spawnUnit('soldier', 'k1', 2, 0);
+  const hp0 = foe.hp, nProj = g.projectiles.length;
+  sw.cd = 0; sw.target = foe;
+  g.updateUnit(sw, 0.1);
+  ok('sword swing lands instantly with a slash arc', foe.hp < hp0
+    && g.projectiles.slice(nProj).every((p) => p.slash === true));
+  // archer: a real arrow flies (not a tracer dot)
+  const ar = g.spawnUnit('archer', 'k0', 0, 10);
+  const foe2 = g.spawnUnit('soldier', 'k1', 8, 10);
+  ar.cd = 0; ar.target = foe2;
+  const n2 = g.projectiles.length;
+  g.updateUnit(ar, 0.1);
+  const shots = g.projectiles.slice(n2).filter((p) => !p.slash);
+  ok('archers loose arrow projectiles', shots.length === 1 && shots[0].kind === 'arrow');
+  // spearman throws heavy spears
+  const sp = g.spawnUnit('spearman', 'k0', 0, 20);
+  const foe3 = g.spawnUnit('soldier', 'k1', 2, 20);
+  sp.cd = 0; sp.target = foe3;
+  const n3 = g.projectiles.length;
+  g.updateUnit(sp, 0.1);
+  ok('spearmen throw spears', g.projectiles.slice(n3).some((p) => p.kind === 'spear'));
+  // catapult lobs arcing stones
+  const from = new THREE.Vector3(0, 2, 0), to = new THREE.Vector3(20, 1, 0);
+  const n4 = g.projectiles.length;
+  g.spawnProjectile(from, to, 0, 10, foe3, 0, 'k0', 'stone', 0.8);
+  const stone = g.projectiles[g.projectiles.length - 1];
+  ok('stones arc high', stone.kind === 'stone' && stone.arcH > 3);
+  void n4;
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

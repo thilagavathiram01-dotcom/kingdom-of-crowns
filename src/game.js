@@ -836,12 +836,78 @@ export class Game {
     // timber is endless through regrowth: nothing is ever spawned or removed
   }
 
-  spawnProjectile(from, to, color, damage, target, splash = 0, owner = 'k0') {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8),
-      new THREE.MeshBasicMaterial({ color }));
+  // shared projectile meshes (no per-shot allocation; kind tells the story:
+  // arrows streak, spears fly heavy, stones arc, bolts zip, tracers glow)
+  projMesh(kind, color) {
+    const key = 'proj|' + kind;
+    let e = this._projCache?.get(key);
+    if (!e) {
+      if (!this._projCache) this._projCache = new Map();
+      const g = new THREE.Group();
+      if (kind === 'arrow') {
+        const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.85),
+          new THREE.MeshBasicMaterial({ color: 0x4a3220 }));
+        const head = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.2, 5),
+          new THREE.MeshBasicMaterial({ color: 0xd7dde5 }));
+        head.rotation.x = Math.PI / 2; head.position.z = 0.5;
+        const fl = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.16, 0.22),
+          new THREE.MeshBasicMaterial({ color: 0xffffff }));
+        fl.position.z = -0.42;
+        g.add(shaft, head, fl);
+      } else if (kind === 'spear') {
+        const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 1.7),
+          new THREE.MeshBasicMaterial({ color: 0x6b4a2b }));
+        const head = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.34, 5),
+          new THREE.MeshBasicMaterial({ color: 0xd7dde5 }));
+        head.rotation.x = Math.PI / 2; head.position.z = 1.0;
+        g.add(shaft, head);
+      } else if (kind === 'stone') {
+        g.add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 0),
+          new THREE.MeshBasicMaterial({ color: 0x57534e })));
+      } else if (kind === 'bolt') {
+        g.add(new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.6),
+          new THREE.MeshBasicMaterial({ color })));
+      } else {
+        g.add(new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8),
+          new THREE.MeshBasicMaterial({ color })));
+      }
+      noPick(g);
+      e = g;
+      this._projCache.set(key, e);
+    }
+    return e.clone(true);
+  }
+
+  spawnProjectile(from, to, color, damage, target, splash = 0, owner = 'k0', kind = 'tracer', dur = 0.22, atype = null) {
+    const m = this.projMesh(kind, color);
     m.position.copy(from);
+    // arrows/spears/bolts fly point-first along their path
+    if (kind === 'arrow' || kind === 'spear' || kind === 'bolt') {
+      m.lookAt(to);
+    }
     this.scene.add(m);
-    this.projectiles.push({ mesh: m, from: from.clone(), to: to.clone(), t: 0, dur: 0.22, damage, target, splash, owner });
+    // stones arc high; everything else flies flat and fast
+    const arcH = kind === 'stone' ? 4 + from.distanceTo(to) * 0.12 : 0;
+    this.projectiles.push({ mesh: m, from: from.clone(), to: to.clone(), t: 0, dur, damage, target, splash, owner, arcH, kind, atype });
+  }
+
+  // melee slash: a quick white arc flash at the victim (sword/axe/club feel).
+  // Scale-and-spin only (no material fades) so the shared mesh stays pristine.
+  slashGeo() {
+    if (!this._slashGeo) this._slashGeo = new THREE.TorusGeometry(0.9, 0.09, 6, 12, Math.PI * 0.9);
+    return this._slashGeo;
+  }
+
+  spawnSlash(x, y, z, angle, color = 0xffffff) {
+    try {
+      const m = new THREE.Mesh(this.slashGeo(),
+        new THREE.MeshBasicMaterial({ color, depthWrite: false }));
+      noPick(m);
+      m.position.set(x, y, z);
+      m.rotation.set(0, angle, 0.5);
+      this.scene.add(m);
+      this.projectiles.push({ mesh: m, slash: true, spin: angle, t: 0, dur: 0.22 });
+    } catch { /* headless */ }
   }
 
   // ---------- input (mouse + touch, no hotkey conflicts) ----------
@@ -2694,13 +2760,25 @@ export class Game {
       const p = this.projectiles[i];
       p.t += dt;
       const k = Math.min(1, p.t / p.dur);
+      if (p.slash) {
+        // sword arc: expand + spin, then gone (shared geo, own material)
+        p.mesh.scale.setScalar(1 + k * 0.8);
+        p.mesh.rotation.y = (p.spin || 0) + k * 1.2;
+        if (k >= 1) {
+          p.mesh.material.dispose();
+          this.scene.remove(p.mesh);
+          this.projectiles.splice(i, 1);
+        }
+        continue;
+      }
       p.mesh.position.lerpVectors(p.from, p.to, k);
+      if (p.arcH) p.mesh.position.y += Math.sin(k * Math.PI) * p.arcH;
       if (k >= 1) {
         this.scene.remove(p.mesh);
         this.projectiles.splice(i, 1);
         if (p.target && !p.target.dead) {
           this.burst(p.to.x, p.to.y, p.to.z, 0xfbbf24, 4, 3);
-          this.damage(p.target, p.damage, p.owner);
+          this.damage(p.target, p.damage, p.owner, p.atype);
           // artillery splash (grid query, not full scan)
           if (p.splash) {
             this.burst(p.to.x, p.to.y, p.to.z, 0xfb923c, 12, 7);
@@ -2936,9 +3014,25 @@ export class Game {
           u.lastShotT = 0;
           const from = new THREE.Vector3(u.x, this.gy(u.x, u.z) + 1.2, u.z);
           const to = new THREE.Vector3(t.x, this.gy(t.x, t.z) + (t.kind === 'building' ? 1.5 : 1.0), t.z);
-          const col = u.type === 'tank' ? 0xfb923c : u.type === 'artillery' ? 0xfde047 : u.owner === this.humanId ? 0x93c5fd : 0xfca5a5;
-          const splash = u.type === 'artillery' ? (CONFIG.units.artillery.splash || 0) : 0;
-          this.spawnProjectile(from, to, col, u.damage, t, splash, u.owner);
+          const dist = from.distanceTo(to);
+          // swords flex point-blank (slash arc + instant edge), archers loose
+          // real arrows, spearmen throw, engines lob arcing stones
+          const MELEE = { swordsman: 1, soldier: 1, knight: 1, brute: 1, ram: 1 };
+          if (MELEE[u.type]) {
+            this.spawnSlash(to.x, to.y, to.z, Math.atan2(to.x - from.x, to.z - from.z));
+            this.damage(t, u.damage, u.owner, u.type);
+          } else if (u.damage > 0) {
+            let kind = 'bolt', dur = 0.22, col = u.owner === this.humanId ? 0x93c5fd : 0xfca5a5;
+            let splash = 0;
+            if (u.type === 'archer') { kind = 'arrow'; dur = 0.12 + dist * 0.012; col = 0xffffff; }
+            else if (u.type === 'spearman' || u.type === 'hunter') { kind = 'spear'; dur = 0.15 + dist * 0.015; col = 0xffffff; }
+            else if (u.type === 'catapult' || u.type === 'artillery') {
+              kind = 'stone'; dur = 0.5 + dist * 0.02; col = 0x57534e;
+              splash = u.type === 'artillery' ? (CONFIG.units.artillery.splash || 0) : (CONFIG.units.catapult?.splash || 0);
+            }
+            else if (u.type === 'tank') { kind = 'bolt'; col = 0xfb923c; }
+            this.spawnProjectile(from, to, col, u.damage, t, splash, u.owner, kind, dur, u.type);
+          }
         }
         return;
       }
