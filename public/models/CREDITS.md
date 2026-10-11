@@ -22,3 +22,12 @@ OpenGameArt (https://opengameart.org, filter CC0 only).
 > building/unit renders with zero downloads, team-tinted in the owner's
 > kingdom colour. Drop GLBs into `public/models/buildings|units|props/` and
 > rename roof/cloak materials to `Team` for automatic recolouring.
+>
+> Troops (`src/troops3d.js`) are articulated low-poly humanoids modelled in
+> the visual idiom of KayKit's Adventurers character pack (kaylousberg.itch.io,
+> free CC0 tier — the reference for our KayKit castle/worker assets): chunky
+> proportions, flat-shaded, class weapons per unit, with code-driven walk
+> swing and attack lunges. Tunic, shield, plume/hood and cape trim take the
+> kingdom dye; skin, leather, wood and iron stay natural. No third-party
+> troop files are shipped — everything is generated at runtime (~20 meshes,
+> <1k tris per trooper, ideal for web/mobile).

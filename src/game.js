@@ -4,6 +4,7 @@ import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite }
 import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE, createAdventurerRig, ADVENTURER_SCALE } from './workers3d.js';
 import { buildingModel } from './buildings3d.js';
 import { kitBuilding, kitUnit } from './kit.js';
+import { buildTrooper, updateTrooper } from './troops3d.js';
 
 let UID = 1;
 // decorative overlays (territory discs, underglows, rings, bars, rally lines)
@@ -474,22 +475,15 @@ export class Game {
       const tip = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.34, 5),
         new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.5, metalness: 0.3 }));
       tip.position.set(0.36, 1.24, 1.7); tip.rotation.x = Math.PI / 2; g.add(tip);
-    } else if (type === 'soldier') {
-      body = new THREE.Mesh(new THREE.CapsuleGeometry(0.45, 0.7, 4, 10), mat);
-      body.position.y = 0.85;
-      const gun = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.2, 6), dark);
-      gun.rotation.x = Math.PI / 2; gun.position.set(0, 0.9, 0.8); g.add(gun);
-    } else if (type === 'scout') {
-      body = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.1, 6), mat);
-      body.position.y = 0.7;
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8),
-        new THREE.MeshBasicMaterial({ color: 0xffffff }));
-      eye.position.set(0, 0.85, 0.35); g.add(eye);
-      const dish = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.9, 6), dark);
-      dish.position.y = 1.3; g.add(dish);
-      const tip = new THREE.Mesh(new THREE.SphereGeometry(0.1, 6, 6),
-        new THREE.MeshBasicMaterial({ color: 0x4ade80 }));
-      tip.position.y = 1.75; g.add(tip);
+    } else if (type === 'soldier' || type === 'swordsman' || type === 'spearman' || type === 'archer' || type === 'knight' || type === 'scout' || type === 'healer' || type === 'spy' || type.startsWith('hero_')) {
+      // articulated class troopers (team-dyed) — no more dummy capsules
+      const tp = buildTrooper(type === 'soldier' ? 'swordsman' : type, this.teamColor(owner));
+      g.add(tp.group);
+      body = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01),
+        new THREE.MeshBasicMaterial({ visible: false }));
+      body.position.y = 0;
+      g.userData.kitHeight = tp.height;
+      g.userData.trooper = tp.parts;
     } else if (type === 'artillery') {
       body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.7, 2.4), mat);
       body.position.y = 0.55;
@@ -498,22 +492,32 @@ export class Game {
       const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.17, 2.2, 8), dark);
       barrel.rotation.x = Math.PI / 2 - 0.25; barrel.position.set(0, 1.5, 1.4); g.add(barrel);
     } else {
-      // hand-crafted kit: swordsman/spearman/archer/knight/healer/catapult/
-      // ram/spy/heroes each get a distinct team-tinted silhouette
-      const kit = kitUnit(type, this.teamColor(owner));
-      if (kit) {
-        g.add(kit.group);
+      // articulated troopers (KayKit-Adventurers idiom, team-dyed tunic /
+      // shield / plume) for class infantry; siege engines keep kit bodies
+      const tp = buildTrooper(type, this.teamColor(owner));
+      if (tp) {
+        g.add(tp.group);
         body = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01),
           new THREE.MeshBasicMaterial({ visible: false }));
         body.position.y = 0;
-        g.userData.kitHeight = kit.height;
+        g.userData.kitHeight = tp.height;
+        g.userData.trooper = tp.parts;
       } else {
+        const kit = kitUnit(type, this.teamColor(owner));
+        if (kit) {
+          g.add(kit.group);
+          body = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01),
+            new THREE.MeshBasicMaterial({ visible: false }));
+          body.position.y = 0;
+          g.userData.kitHeight = kit.height;
+        } else {
         body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.7, 2.1), mat);
         body.position.y = 0.55;
         const tur = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.4, 10), dark);
         tur.position.y = 1.05; g.add(tur);
         const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.6, 6), dark);
         barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 1.05, 1.2); g.add(barrel);
+        }
       }
     }
     body.castShadow = true;
@@ -542,6 +546,7 @@ export class Game {
     this.scene.add(g);
     const u = {
       id: UID++, kind: 'unit', type, owner, mesh: g, gem, ring, bar, body, rig,
+      trooper: g.userData.trooper || null,
       x, z, hp: st.hp, maxHp: st.hp, speed: st.speed,
       damage: st.damage, range: st.range, cooldown: st.cooldown, aggro: st.aggro,
       radius: st.radius, cd: Math.random() * 0.3, tx: x, tz: z, hasOrder: false,
@@ -2672,6 +2677,7 @@ export class Game {
       }
       // selection ring pulse + worker cargo gem
       if (u.rig) this.updateWorkerRig(u, dt, moved);
+      else if (u.trooper) updateTrooper(u.trooper, dt, moved, u.speed, (u.lastShotT ?? 99) < 0.35);
       if (u.gem) {
         u.gem.visible = u.carrying > 0;
         if (u.gem.visible) u.gem.rotation.x += dt * 3;
