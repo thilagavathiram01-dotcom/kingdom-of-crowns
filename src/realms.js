@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, BUILD_DEFS, TERRAIN_SPEED, AGES } from './config.js';
+import { CONFIG, BUILD_DEFS, TERRAIN_SPEED, AGES, DOOM } from './config.js';
 import { tickFarm, tickMill, tickUpkeep, tickStarvationDamage } from './economy.js';
 import { WorldEvents } from './events.js';
 import { Diplomacy } from './diplomacy.js';
@@ -41,6 +41,7 @@ export function installRealms(game, ai) {
   // stone / crystal nodes are removed resource types: timber only.
   spawnPickups(game);
   spawnVillages(game);
+  if (game.doom) setupDoom(game, R);
 
   // war horn for the human
   game.warHorn = () => {
@@ -569,8 +570,45 @@ function countWars(game) {
   return 0;
 }
 
+// "Defeat the Doom King": bind the free kingdoms into one alliance, lock
+// Doomsvally into eternal war, and enrich the dark valley with resources.
+function setupDoom(game, R) {
+  const D = game.diplomacy;
+  const good = game.aliveKingdoms().filter(id => id !== game.doomKing);
+  if (D && D.forceAlliance) {
+    for (let i = 0; i < good.length; i++) {
+      for (let j = i + 1; j < good.length; j++) D.forceAlliance(good[i], good[j]);
+      D.forceWar(game.doomKing, good[i], true);
+    }
+  }
+  // Doomsvally's war chest: healing springs + treasure hoards ring the throne
+  try {
+    const hq = game.hqOf(game.doomKing);
+    game.pickups = game.pickups || [];
+    if (hq) {
+      const mk = (kind, x, z, color) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.4),
+          new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.4, flatShading: true }));
+        m.position.set(x, game.gy(x, z) + 1, z);
+        game.scene.add(m);
+        game.pickups.push({ kind, x, z, mesh: m, taken: false });
+      };
+      for (let k = 0; k < 10; k++) {
+        const a = (k / 10) * Math.PI * 2;
+        const r = 16 + (k % 3) * 4;
+        const x = hq.x + Math.cos(a) * r, z = hq.z + Math.sin(a) * r;
+        mk(k % 2 ? 'spring' : 'chest', x, z, k % 2 ? 0x4dff88 : 0xffd34d);
+      }
+    }
+  } catch { /* headless */ }
+  game.hookMsg('🌑 The Doom King stirs in Doomsvally. Unite the kingdoms — march, and end him.');
+}
+
 function checkWins(game, R) {
   if (game.over) return;
+  // Doom mode has its own single objective: topple (or fail to topple) the
+  // Doom King. Shards / Crown Hall / conquest-dominance do not apply.
+  if (game.doom) { try { game.checkGameOver?.(); } catch { /* ignore */ } return; }
   const alive = game.aliveKingdoms();
   const me = game.players[game.humanId];
   // Conquest: only the human remains

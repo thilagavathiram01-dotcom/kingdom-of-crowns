@@ -105,6 +105,44 @@ export const CONFIG = {
   },
 };
 
+// ---- Game modes: classic (12 kingdoms) vs. "Defeat the Doom King" ----
+// configureMode() mutates CONFIG *before* a Game is constructed, so the whole
+// engine (spawn layout, map size, kingdom count) adapts with no branches.
+export const MODES = {
+  classic: { mapSize: 600, kingdoms: 12, kingdomSpacing: 140 },
+  doom:    { mapSize: 520, kingdoms: 5,  kingdomSpacing: 170 },
+};
+let _mode = 'classic';
+export function configureMode(mode) {
+  _mode = MODES[mode] ? mode : 'classic';
+  const m = MODES[_mode];
+  CONFIG.mode = _mode;
+  CONFIG.mapSize = m.mapSize;
+  CONFIG.kingdoms = m.kingdoms;
+  CONFIG.kingdomSpacing = m.kingdomSpacing;
+  return _mode;
+}
+export function currentMode() { return _mode; }
+
+// The Doom King sits at kingdom index 1; the human holds k0 and k2..k4 are
+// coerced allies. Only Doomsvally (the Doom King's huge, resource-rich home)
+// is hostile soil — everyone else is on the same side.
+export const DOOM = {
+  doomIdx: 1,
+  allyIds: [2, 3, 4],
+  color: 0x4a0d1a,       // near-black blood red
+  accent: 0xff2d55,
+  name: 'Doom King',
+  startArmy: 16,         // extra fighters on top of the standard opener
+  startBrutes: 6,
+  startWorkers: 8,
+  startBarracks: 3,
+  hqLevel: 3,            // Doomsvally already stands as a fortress
+  stock: { wood: 1500, food: 1200 },
+  aggression: 1.7,       // war-readiness multiplier (rushes far sooner)
+  waveGapSec: [55, 110], // relentless wave cadence
+};
+
 // ---- Streamlined 2-Resource Economy: Wood (chopped) + Food (mills & farms) ----
 export const RESOURCES = {
   wood:    { color: 0x8b5a2b, carry: 10, icon: '🪵' },

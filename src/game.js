@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, COLORS, kingdomColor, kingdomName, BUILD_REQUIRES, UNIT_REQUIRES, BUILD_DEFS, UNIT_DEFS, TRAIN_AGE, AGE_NAMES, HQ_LEVELS, NEW_HQ_COST, MAX_HQ_PER_KINGDOM } from './config.js';
+import { CONFIG, COLORS, kingdomColor, kingdomName, BUILD_REQUIRES, UNIT_REQUIRES, BUILD_DEFS, UNIT_DEFS, TRAIN_AGE, AGE_NAMES, HQ_LEVELS, NEW_HQ_COST, MAX_HQ_PER_KINGDOM, DOOM } from './config.js';
 import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite } from './terrain.js';
 import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE, createAdventurerRig, ADVENTURER_SCALE } from './workers3d.js';
 import { buildingModel } from './buildings3d.js';
@@ -69,6 +69,12 @@ export class Game {
 
     // ---- kingdoms: k0 = human, k1..k29 = AI ----
     this.humanId = 'k0';
+    this.mode = CONFIG.mode || 'classic';
+    this.doom = this.mode === 'doom';
+    this.noFog = this.doom;            // Doom King lands under an open sky
+    this.doomKing = this.doom ? `k${DOOM.doomIdx}` : null;
+    // kingdoms the human may command (own + coerced allies in doom mode)
+    this.controllable = new Set([this.humanId]);
     this.players = {};
     const startLogs = CONFIG.startLogs ?? 300;
     const startFood = CONFIG.startFood ?? 250;
@@ -85,6 +91,17 @@ export class Game {
         alive: true,
       };
     }
+    if (this.doom) {
+      const dk = this.players[this.doomKing];
+      dk.name = DOOM.name;
+      dk.color = DOOM.color;
+      dk.lord = DOOM.name;
+      for (const i of DOOM.allyIds) {
+        if (!this.players[`k${i}`]) continue;
+        this.controllable.add(`k${i}`);
+        this.players[`k${i}`].ally = true;
+      }
+    }
 
     // candidate HQ sites on a jittered grid; peaks are repelled from all of
     // them, then the 30 flattest well-spread sites become villages with pads.
@@ -93,6 +110,7 @@ export class Game {
     this.slots = this.layoutSlots();
     this.terrain = generateTerrain(CONFIG.mapSize, [], Math.floor(Math.random() * 1e9), this.slots);
     this.kingdomSpawns = this.pickKingdomSpawns(this.slots, CONFIG.kingdoms);
+    if (this.doom) this.orderDoomSpawns();
     for (const s of this.kingdomSpawns) applyFlatten(this.terrain, s.x, s.z, 24, 0.5, 2.0);
 
     this.time = 0;
@@ -110,6 +128,14 @@ export class Game {
   }
 
   isHuman(id) { return id === this.humanId; }
+
+  // who the human may tap-select and command: own kingdom, plus the coerced
+  // allies in Doom mode (shared control). Buildings stay human-owned, but
+  // allied *units* are freely steerable.
+  canControl(id) { return !!id && (id === this.humanId || this.controllable?.has(id)); }
+
+  // a fallen kingdom's units/buildings stay dead; allies keep their colours
+  allyIds() { return [...(this.controllable || [])].filter(id => id !== this.humanId); }
 
   kingdomIds() { return Object.keys(this.players); }
 
@@ -395,6 +421,96 @@ export class Game {
     return ring;
   }
 
+  // Doomsvally rises as far from the player's throne as the map allows, so the
+  // dark host is a real march away. Swap the human's farthest pick into the
+  // Doom King's slot (index DOOM.doomIdx).
+  orderDoomSpawns() {
+    const home = this.kingdomSpawns[0];
+    let bi = 1, bd = -1;
+    for (let i = 1; i < this.kingdomSpawns.length; i++) {
+      const d = Math.hypot(this.kingdomSpawns[i].x - home.x, this.kingdomSpawns[i].z - home.z);
+      if (d > bd) { bd = d; bi = i; }
+    }
+    const slot = DOOM.doomIdx;
+    const tmp = this.kingdomSpawns[slot];
+    this.kingdomSpawns[slot] = this.kingdomSpawns[bi];
+    this.kingdomSpawns[bi] = tmp;
+  }
+
+  // Doomsvally: level-3 fortress, extra barracks, a big standing army and a
+  // rich opening treasury. Allies instead get a modest defensive bonus so the
+  // human still has to carry the war.
+  seedDoomKingdom(id, s, hq, H) {
+    const isDoom = id === this.doomKing;
+    if (isDoom) {
+      const st = this.players[id];
+      st.wood = DOOM.stock.wood; st.logs = DOOM.stock.wood; st.food = DOOM.stock.food;
+      hq.level = DOOM.hqLevel;
+      hq.maxHp = Math.round(hq.maxHp * 1.35 * 1.35);
+      hq.hp = hq.maxHp;
+      this.refreshTerritoryRing(hq);
+      const raxR = CONFIG.buildings.barracks.size * 0.72;
+      const R = this.hqRadiusOf(hq) * 0.6;
+      for (let k = 0; k < DOOM.startBarracks; k++) {
+        const a = (k / DOOM.startBarracks) * Math.PI * 2 + 0.6;
+        const bx = THREE.MathUtils.clamp(s.x + Math.cos(a) * R, -H + 6, H - 6);
+        const bz = THREE.MathUtils.clamp(s.z + Math.sin(a) * R, -H + 6, H - 6);
+        const spot = this.findFreeSpot(bx, bz, raxR + 0.6);
+        this.spawnBuilding('barracks', id, spot.x, spot.z);
+      }
+      for (let k = 0; k < DOOM.startWorkers - 3; k++) this.spawnUnit('worker', id, s.x - 3 - k * 1.5, s.z + 5);
+      const army = [];
+      for (let k = 0; k < DOOM.startArmy; k++) army.push(k % 4 === 3 ? 'hunter' : 'soldier');
+      for (let k = 0; k < DOOM.startBrutes; k++) army.push('brute');
+      army.forEach((t, k) => {
+        const a = (k / army.length) * Math.PI * 2;
+        const r = 12 + (k % 3) * 2;
+        this.spawnUnit(t, id, s.x + Math.cos(a) * r, s.z + Math.sin(a) * r);
+      });
+      st.age = 2; // Doomsvally already knows castle warfare
+    } else if (id !== this.humanId && this.controllable.has(id)) {
+      // allies: hand them a second barracks' worth of defenders
+      const st = this.players[id];
+      st.wood = Math.round(st.wood * 1.4); st.logs = st.wood;
+      st.food = Math.round(st.food * 1.4);
+      for (let k = 0; k < 3; k++) this.spawnUnit('soldier', id, s.x - 4 - k, s.z + 8);
+    }
+  }
+
+  // Rally every living kingdom into one crusade and send the host at
+  // Doomsvally. Called from the HUD button (and from the story overlay).
+  marchToDoomValley() {
+    if (!this.doom || this.over) return false;
+    const doom = this.players[this.doomKing];
+    const target = this.hqOf(this.doomKing);
+    if (!doom || !doom.alive || !target) { this.hookMsg('🌑 Doomsvally is already broken.'); return false; }
+    // end any standing pacts between the living so nobody holds back
+    const ids = this.aliveKingdoms().filter(id => id !== this.doomKing);
+    if (this.diplomacy) {
+      for (let i = 0; i < ids.length; i++) {
+        for (let j = i + 1; j < ids.length; j++) {
+          this.diplomacy.forceAlliance?.(ids[i], ids[j]);
+        }
+        this.diplomacy.forceWar?.(this.doomKing, ids[i]); // no pact with evil
+      }
+    }
+    this.crusade = true;
+    for (const id of ids) {
+      for (const u of this.units) {
+        if (u.dead || u.owner !== id || u.type === 'worker') continue;
+        const a = (u.id % 12) / 12 * Math.PI * 2;
+        const r = 20 + (u.id % 5) * 3;
+        this.orderAttackMove([u], target.x + Math.cos(a) * r, target.z + Math.sin(a) * r);
+      }
+      this.musterFormation?.(id, this.doomKing);
+      if (this._brainOf?.(id)) this._brainOf(id).crusadeTarget = this.doomKing;
+    }
+    this.warHorn?.();
+    this.hookMsg('🌑🔥 THE GREAT CRUSADE — every crown marches on Doomsvally!');
+    try { this.hooks?.onCrusade?.(); } catch { /* headless */ }
+    return true;
+  }
+
   initMap() {
     const H = CONFIG.mapSize / 2;
     // one HQ + barracks + small starters per kingdom (rise, don't rush).
@@ -416,6 +532,7 @@ export class Game {
       this.spawnUnit('soldier', id, s.x + 3, s.z + 8);
       this.spawnUnit('scout', id, s.x + 5, s.z + 8);
       this.spawnUnit('brute', id, s.x - 2, s.z + 7.5);
+      if (this.doom) this.seedDoomKingdom(id, s, hq, H);
     });
 
     // timber economy: EVERY terrain tree is harvestable. Workers only chop
@@ -987,7 +1104,7 @@ export class Game {
     // double-click: select all same-type units (classic RTS)
     el.addEventListener('dblclick', e => {
       const hit = this.pickEntities(e.clientX, e.clientY, false);
-      if (hit && hit.kind === 'unit' && hit.owner === this.humanId) this.selectSameType(hit);
+      if (hit && hit.kind === 'unit' && this.canControl(hit.owner)) this.selectSameType(hit);
     });
 
     // ----- touch (mobile-first: tap orders, 1-finger drag pans, pinch zooms) -----
@@ -1008,7 +1125,7 @@ export class Game {
           if (!st.moved && !this.placement && this.touchState === st) {
             st.longFired = true;
             const hit = this.pickEntities(st.x, st.y, false);
-            if (hit && hit.kind === 'unit' && hit.owner === this.humanId) {
+            if (hit && hit.kind === 'unit' && this.canControl(hit.owner)) {
               this.selectSameType(hit);
               buzz(20);
             }
@@ -1106,7 +1223,7 @@ export class Game {
       if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(k)) {
         if (e.shiftKey || e.ctrlKey || e.metaKey) {
           e.preventDefault();
-          this.groups[k] = this.selected.filter(s => s.kind === 'unit' && s.owner === this.humanId && !s.dead).map(s => s.id);
+          this.groups[k] = this.selected.filter(s => s.kind === 'unit' && this.canControl(s.owner) && !s.dead).map(s => s.id);
           this.hookMsg(`Group ${k} saved (${this.groups[k].length} units) — press ${k} to recall`);
         } else {
           const ids = this.groups[k];
@@ -1212,7 +1329,7 @@ export class Game {
     const hit = this.pickEntities(sx, sy, false);
     const units = this.selected.filter(s => s.kind === 'unit' && !s.dead);
     // enemy tapped while we have an army -> attack (works with LEFT click too)
-    if (hit && (hit.kind === 'unit' || hit.kind === 'building') && hit.owner !== this.humanId && hit.owner && units.length) {
+    if (hit && (hit.kind === 'unit' || hit.kind === 'building') && !this.canControl(hit.owner) && hit.owner && units.length) {
       this.attackOrBetray(units, hit);
       return;
     }
@@ -1224,11 +1341,11 @@ export class Game {
       return;
     }
     // own HQ tapped while workers carry cargo -> return goods
-    if (hit && hit.kind === 'building' && hit.owner === this.humanId && units.some(u => u.type === 'worker' && u.carrying > 0)) {
+    if (hit && hit.kind === 'building' && this.canControl(hit.owner) && units.some(u => u.type === 'worker' && u.carrying > 0)) {
       this.orderReturn(units.filter(u => u.type === 'worker' && u.carrying > 0), hit);
       return;
     }
-    if (hit && hit.kind !== 'resource' && hit.owner === this.humanId) {
+    if (hit && hit.kind !== 'resource' && (hit.kind === 'unit' ? this.canControl(hit.owner) : hit.owner === this.humanId)) {
       this.setSelection([hit]);
       return;
     }
@@ -1246,7 +1363,7 @@ export class Game {
 
   selectSameType(ref) {
     if (!ref || ref.kind !== 'unit') return;
-    this.setSelection(this.units.filter(u => u.owner === this.humanId && !u.dead && u.type === ref.type).slice(0, 30));
+    this.setSelection(this.units.filter(u => this.canControl(u.owner) && !u.dead && u.type === ref.type).slice(0, 30));
   }
 
   boxSelect(a, b) {
@@ -1255,7 +1372,7 @@ export class Game {
     const sel = [];
     const v = new THREE.Vector3();
     for (const u of this.units) {
-      if (u.owner !== this.humanId || u.dead) continue;
+      if (!this.canControl(u.owner) || u.dead) continue;
       v.set(u.x, 0, u.z).project(this.camera);
       const sx = (v.x * 0.5 + 0.5) * innerWidth, sy = (-v.y * 0.5 + 0.5) * innerHeight;
       if (sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1 && v.z < 1) sel.push(u);
@@ -1275,7 +1392,7 @@ export class Game {
       s.ring.visible = true;
       if (s.bar && !s.dead) {
         s.bar.visible = true;
-        s.bar.userData.set(s.hp / s.maxHp, s.owner === this.humanId);
+        s.bar.userData.set(s.hp / s.maxHp, this.canControl(s.owner));
         s.bar.lookAt(this.camera.position);
       }
     }
@@ -1904,8 +2021,8 @@ export class Game {
     }
   }
 
-  selectArmy() { this.setSelection(this.units.filter(u => u.owner === this.humanId && !u.dead && u.type !== 'worker')); }
-  selectWorkers() { this.setSelection(this.units.filter(u => u.owner === this.humanId && !u.dead && u.type === 'worker')); }
+  selectArmy() { this.setSelection(this.units.filter(u => this.canControl(u.owner) && !u.dead && u.type !== 'worker')); }
+  selectWorkers() { this.setSelection(this.units.filter(u => this.canControl(u.owner) && !u.dead && u.type === 'worker')); }
   focusHQ() {
     const hq = this.buildings.find(b => b.owner === this.humanId && b.type === 'hq' && !b.dead);
     if (hq) { this.camTarget.set(hq.x, 0, hq.z); this.setSelection([hq]); }
@@ -2534,9 +2651,16 @@ export class Game {
     if (cx < 0 || cz < 0 || cx >= N || cz >= N) return -1;
     return cz * N + cx;
   }
-  isVisibleAt(x, z) { const i = this.fogCell(x, z); return i >= 0 && this.visibleF[i] === 1; }
-  isExploredAt(x, z) { const i = this.fogCell(x, z); return i >= 0 && this.explored[i] === 1; }
+  isVisibleAt(x, z) {
+    if (this.noFog) return true;
+    const i = this.fogCell(x, z); return i >= 0 && this.visibleF[i] === 1;
+  }
+  isExploredAt(x, z) {
+    if (this.noFog) return true;
+    const i = this.fogCell(x, z); return i >= 0 && this.explored[i] === 1;
+  }
   visibleTo(owner, x, z) {
+    if (this.noFog) return true;            // Doom mode: open sky for all
     if (owner !== this.humanId) return true; // AI plays with full vision
     return this.isVisibleAt(x, z);
   }
@@ -2546,6 +2670,22 @@ export class Game {
   }
 
   updateFog() {
+    // Doom mode has no fog: reveal everything and show every mesh once.
+    if (this.noFog) {
+      this.visibleF.fill(1);
+      this.explored.fill(1);
+      if (this.fogMesh) this.fogMesh.visible = false;
+      // clear the shroud canvas too — the minimap composites it
+      if (this.fogImg) {
+        const d = this.fogImg.data;
+        for (let i = 3; i < d.length; i += 4) d[i] = 0;
+        this.fogCtx?.putImageData(this.fogImg, 0, 0);
+        if (this.fogTex) this.fogTex.needsUpdate = true;
+      }
+      for (const u of this.units) if (!u.dead) u.mesh.visible = true;
+      for (const b of this.buildings) if (!b.dead) b.mesh.visible = true;
+      return;
+    }
     const N = this.fogN, H = CONFIG.mapSize / 2, cell = (2 * H) / N;
     this.visibleF.fill(0);
     const stamp = (x, z, sight) => {
@@ -2806,7 +2946,7 @@ export class Game {
         if (b.head) b.head.lookAt(e.x, this.gy(e.x, e.z) + 2, e.z);
         const from = new THREE.Vector3(b.x, this.gy(b.x, b.z) + 2.4, b.z);
         const to = new THREE.Vector3(e.x, this.gy(e.x, e.z) + 1.2, e.z);
-        this.spawnProjectile(from, to, b.owner === this.humanId ? 0x93c5fd : 0xfca5a5, st.damage, e, 0, b.owner);
+        this.spawnProjectile(from, to, this.canControl(b.owner) ? 0x93c5fd : 0xfca5a5, st.damage, e, 0, b.owner);
       } else {
         b.cd = 0.2 + Math.random() * 0.1; // idle: scan ~4x/s, not every frame
       }
@@ -3022,7 +3162,7 @@ export class Game {
             this.spawnSlash(to.x, to.y, to.z, Math.atan2(to.x - from.x, to.z - from.z));
             this.damage(t, u.damage, u.owner, u.type);
           } else if (u.damage > 0) {
-            let kind = 'bolt', dur = 0.22, col = u.owner === this.humanId ? 0x93c5fd : 0xfca5a5;
+            let kind = 'bolt', dur = 0.22, col = this.canControl(u.owner) ? 0x93c5fd : 0xfca5a5;
             let splash = 0;
             if (u.type === 'archer') { kind = 'arrow'; dur = 0.12 + dist * 0.012; col = 0xffffff; }
             else if (u.type === 'spearman' || u.type === 'hunter') { kind = 'spear'; dur = 0.15 + dist * 0.015; col = 0xffffff; }
@@ -3687,16 +3827,28 @@ export class Game {
   }
 
   checkGameOver() {
+    if (this.doom) return this.checkDoomGameOver();
     const pHQ = this.buildings.find(b => b.owner === this.humanId && b.type === 'hq' && !b.dead);
-    if (!pHQ) return this.endGame(false);
+    if (!pHQ) return this.endGame(false, 'Your HQ has fallen.');
     const rivals = this.buildings.some(b => !this.isHuman(b.owner) && b.type === 'hq' && !b.dead);
-    if (!rivals) return this.endGame(true);
+    if (!rivals) return this.endGame(true, 'Conquest — every rival kingdom has fallen!');
   }
 
-  endGame(win) {
+  // Doom mode: win by toppling the Doom King's throne; lose if your own HQ
+  // falls OR the dark host erases every other kingdom first.
+  checkDoomGameOver() {
+    const doomHQ = this.buildings.some(b => b.owner === this.doomKing && b.type === 'hq' && !b.dead);
+    if (!doomHQ) return this.endGame(true, 'The Doom King is defeated.');
+    const pHQ = this.buildings.some(b => b.owner === this.humanId && b.type === 'hq' && !b.dead);
+    if (!pHQ) return this.endGame(false, 'Your kingdom has fallen to the Doom King.');
+    const friends = this.aliveKingdoms().filter(id => id !== this.doomKing && id !== this.humanId);
+    if (!friends.length) return this.endGame(false, 'The Doom King destroyed every kingdom.');
+  }
+
+  endGame(win, sub) {
     if (this.over) return;
     this.over = true;
-    this.hooks.onGameOver?.(win, this.time);
+    this.hooks.onGameOver?.(win, sub ?? this.time);
   }
 
   render() { this.renderer.render(this.scene, this.camera); }

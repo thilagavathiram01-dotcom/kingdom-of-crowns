@@ -2,9 +2,10 @@
 // oriented-box collision, cheap walls, starter keeps and caveman troop stats.
 import * as THREE from 'three';
 import { readFileSync } from 'fs';
-import { CONFIG, HQ_LEVELS, NEW_HQ_COST, MAX_HQ_PER_KINGDOM } from './src/config.js';
+import { CONFIG, HQ_LEVELS, NEW_HQ_COST, MAX_HQ_PER_KINGDOM, DOOM, MODES, configureMode, currentMode } from './src/config.js';
 import { Game } from './src/game.js';
 import { KingdomBrain } from './src/ai.js';
+import { Diplomacy } from './src/diplomacy.js';
 
 let pass = 0, fail = 0;
 const ok = (n, c, d = '') => { if (c) { pass++; console.log('PASS', n); } else { fail++; console.log('FAIL', n, d); } };
@@ -823,6 +824,98 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   ok('search filters rooms', R.searchRooms('crown').length === 1 && R.searchRooms('').length === 2);
   ok('locked join needs the password', !!R.joinRoom(b.room.id).error && !!R.joinRoom(b.room.id, 'nope').error && !!R.joinRoom(b.room.id, 's3cr3t').room);
   R._clearRooms();
+}
+
+// ---------- 25. Doom mode: mode configuration ----------
+{
+  const classic = { mapSize: CONFIG.mapSize, kingdoms: CONFIG.kingdoms, spacing: CONFIG.kingdomSpacing };
+  configureMode('doom');
+  ok('doom mode registered', currentMode() === 'doom');
+  ok('doom field 5 kingdoms', CONFIG.kingdoms === 5);
+  ok('doom map is smaller', CONFIG.mapSize < classic.mapSize);
+  ok('doom keeps kingdoms far apart', CONFIG.kingdomSpacing >= 150);
+  ok('doom config maps exist', !!MODES.doom && !!MODES.classic);
+  ok('undeclared modes fall back to classic', configureMode('nope') === 'classic');
+  configureMode('doom');
+  ok('doom king + three allies defined', DOOM.doomIdx === 1 && DOOM.allyIds.length === 3);
+  ok('doom king starts armed', DOOM.startArmy >= 10 && DOOM.startBarracks >= 2 && DOOM.hqLevel >= 2);
+  configureMode('classic');
+  ok('classic restored', CONFIG.kingdoms === classic.kingdoms && CONFIG.mapSize === classic.mapSize);
+}
+
+// ---------- 26. Doom mode: coerced diplomacy ----------
+{
+  const g = fakeGame();
+  g.diplomacy = new Diplomacy(g);
+  g.diplomacy.forceAlliance('k0', 'k2');
+  ok('forced alliance is peace', g.diplomacy.isAllied('k0', 'k2') && g.diplomacy.atPeace('k0', 'k2'));
+  g.diplomacy.forceWar('k1', 'k0', true);
+  const r = g.diplomacy.get('k1', 'k0');
+  ok('forced war + total war', r.type === 'war' && r.totalWar === true);
+}
+
+// ---------- 27. Doom mode: shared control + no fog ----------
+{
+  const g = fakeGame();
+  g.controllable = new Set(['k0', 'k2', 'k3']);
+  ok('human always controllable', g.canControl('k0'));
+  ok('allies are controllable', g.canControl('k2') && g.canControl('k3'));
+  ok('doom king is not controllable', !g.canControl('k1'));
+  g.noFog = true;
+  ok('no-fog reveals the map', g.isVisibleAt(0, 0) && g.isExploredAt(50, -50) && g.visibleTo('k0', 999, 999));
+}
+
+// ---------- 28. Doom mode: win / lose conditions ----------
+{
+  const setup = () => {
+    const g = fakeGame();
+    g.doom = true; g.doomKing = 'k1'; g.over = false;
+    g.players = { k0: { id: 'k0', alive: true }, k1: { id: 'k1', alive: true }, k2: { id: 'k2', alive: true } };
+    g.buildings = [
+      { id: 1, owner: 'k0', type: 'hq', dead: false },
+      { id: 2, owner: 'k1', type: 'hq', dead: false },
+      { id: 3, owner: 'k2', type: 'hq', dead: false },
+    ];
+    g.hooks = { onGameOver: (w, s) => { g._res = { w, s }; } };
+    return g;
+  };
+  let g = setup();
+  g.checkGameOver();
+  ok('doom: no premature end', !g.over);
+  g = setup(); g.buildings = g.buildings.filter(b => b.owner !== 'k1'); g.checkGameOver();
+  ok('doom: king falls → win', g.over && g._res.w === true);
+  g = setup(); g.buildings = g.buildings.filter(b => b.owner !== 'k0'); g.checkGameOver();
+  ok('doom: your HQ falls → lose', g.over && g._res.w === false);
+  g = setup(); g.players.k2.alive = false; g.buildings = g.buildings.filter(b => b.owner !== 'k2'); g.checkGameOver();
+  ok('doom: allies wiped → lose', g.over && g._res.w === false);
+}
+
+// ---------- 29. Doom mode: the great crusade ----------
+{
+  const g = fakeGame();
+  g.doom = true; g.over = false; g.doomKing = 'k1';
+  g.players = { k0: { id: 'k0', alive: true }, k1: { id: 'k1', alive: true }, k2: { id: 'k2', alive: true } };
+  g.controllable = new Set(['k0', 'k2']);
+  g.diplomacy = new Diplomacy(g);
+  g.hookMsg = () => {}; g.warHorn = () => {}; g._brainOf = () => null;
+  let moves = 0; g.orderAttackMove = () => { moves++; };
+  g.musterFormation = () => {};
+  g.buildings = [
+    { id: 1, owner: 'k1', type: 'hq', dead: false, x: 200, z: 200 },
+    { id: 2, owner: 'k0', type: 'hq', dead: false, x: 0, z: 0 },
+  ];
+  g.hqOf = (o) => g.buildings.find(b => b.owner === o && b.type === 'hq' && !b.dead);
+  g.units = [
+    { id: 1, owner: 'k0', type: 'soldier', dead: false },
+    { id: 2, owner: 'k2', type: 'worker', dead: false },
+    { id: 3, owner: 'k2', type: 'brute', dead: false },
+  ];
+  const r = g.marchToDoomValley();
+  ok('crusade orders the host to march', r === true && g.crusade === true && moves >= 2);
+  ok('crusade locks the doom king in war', g.diplomacy.get('k1', 'k0').type === 'war');
+  ok('crusade allies the free kingdoms', g.diplomacy.isAllied('k0', 'k2'));
+  const once = moves; g.marchToDoomValley();
+  ok('crusade can be re-issued', moves > once);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

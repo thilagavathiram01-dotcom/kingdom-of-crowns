@@ -1,4 +1,4 @@
-import { WAR, PERSONALITY_WAR, LORDS } from './config.js';
+import { WAR, PERSONALITY_WAR, LORDS, DOOM } from './config.js';
 
 // README-2 § War declaration (no timer): each brain checks readiness
 // every ~10s and declares war only when every gate passes.
@@ -136,6 +136,13 @@ export function installWar(game, ai) {
     br.ownerIdx = idx;
     br.warStyle = styleOf(idx);
     br.lord = lordName(idx);
+    // Doom King: no diplomacy, no mercy — an unrelenting warlord. Style is set
+    // BEFORE thresholds are read so the warlord rules apply.
+    if (game.doom && game.doomKing === br.owner) {
+      br.doom = true;
+      br.warStyle = 'warlord';
+      br.lord = DOOM.name;
+    }
     const th = thresholdsFor(br.warStyle);
     // personality tunes thresholds (replaces fixed timeline)
     if (br.P) {
@@ -146,12 +153,19 @@ export function installWar(game, ai) {
     }
     br.warCooldownUntil = 0;
     br.activeWars = 0;
+    if (br.doom && br.P) Object.assign(br.P, {
+      militarism: 0.98, fortLove: 0.7, vengeance: 1.6, caution: 0.05,
+      wantArmy: 90, maxBarracks: 8, raxPace: 60,
+      fortReady: 0.25, attackRatio: 0.5, maxWars: 99, waveMin: 4,
+      reach: 9999, waveGap: [DOOM.waveGapSec[0], DOOM.waveGapSec[1]],
+    });
     const rawLaunch = br.launch?.bind(br);
     if (rawLaunch) {
       br.launch = (kind, foe, units, myHq, objectiveOverride = null) => {
-        if ((br.activeWars || 0) >= th.maxWars) return;
+        const maxWars = br.P?.maxWars ?? th.maxWars;
+        if ((br.activeWars || 0) >= maxWars && !br.crusadeTarget) return;
         // early guard: no day-one rushes (readiness gate, not a timer)
-        if (buildingCount(game, br) < WAR.minBuildings && kind !== 'revenge') return;
+        if (buildingCount(game, br) < WAR.minBuildings && kind !== 'revenge' && !br.crusadeTarget) return;
         // pact-bound target? this is betrayal — pay mobilization or stand down.
         // (challenged windows break free; alliances/ceasefires cost the fee.)
         const pact = game.diplomacy?.get(br.owner, foe)?.type;
@@ -159,7 +173,7 @@ export function installWar(game, ai) {
         br._betrayNext = false;
         if (pactBound) {
           if (!game.diplomacy || !game.diplomacy.betray(br.owner, foe)) return; // cannot pay
-        } else {
+        } else if (pact !== 'war') {
           game.diplomacy?.declareWar(br.owner, foe);
         }
         br.activeWars = (br.activeWars || 0) + 1;
@@ -174,7 +188,9 @@ export function installWar(game, ai) {
           br.warCooldownUntil = game.time + WAR.cooldownSec;
           // total war never ends in negotiation — brief regroup, then back in
           const foe = br.wave?.foe;
-          if (foe && game.diplomacy?.isTotalWar?.(br.owner, foe)) {
+          if (br.doom) {
+            br.warCooldownUntil = game.time + 20; // relentless: no peace, ever
+          } else if (foe && game.diplomacy?.isTotalWar?.(br.owner, foe)) {
             br.warCooldownUntil = game.time + 20;
           } else if (foe && !game.diplomacy?.ceasefire(br.owner, foe, 10, br.owner)) {
             // sue for peace: paid ceasefire if affordable, else a free truce

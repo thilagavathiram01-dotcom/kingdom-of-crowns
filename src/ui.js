@@ -879,15 +879,27 @@ export class HUD {
     c.lineWidth = 1;
   }
 
-  showGameOver(win, time) {
+  showGameOver(win, info) {
     const o = document.getElementById('game-over');
     if (!o) return;
     o.classList.remove('hidden');
-    const alive = this.game.aliveKingdoms().length;
-    document.getElementById('game-over-title').textContent = win ? '👑 Crowned!' : 'Defeat';
-    document.getElementById('game-over-sub').textContent = win
-      ? `All ${CONFIG.kingdoms - 1} rival kingdoms have fallen • ${this.fmtTime(time)}`
-      : `Your kingdom has fallen • ${alive} remain • ${this.fmtTime(time)}`;
+    const game = this.game;
+    const doom = !!game?.doom;
+    const alive = game.aliveKingdoms().length;
+    const title = document.getElementById('game-over-title');
+    const sub = document.getElementById('game-over-sub');
+    if (title) title.textContent = win ? (doom ? '👑 Doom Vanquished!' : '👑 Crowned!') : 'Defeat';
+    let text;
+    if (typeof info === 'string' && info) text = info;
+    else if (doom) {
+      text = win ? 'The Doom King is defeated.'
+        : 'Your kingdom has fallen — or the Doom King destroyed the kingdoms.';
+    } else {
+      text = win
+        ? `All ${CONFIG.kingdoms - 1} rival kingdoms have fallen • ${this.fmtTime(info)}`
+        : `Your kingdom has fallen • ${alive} remain • ${this.fmtTime(info)}`;
+    }
+    if (sub) sub.textContent = text;
     buzz(60);
   }
 }

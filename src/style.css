@@ -879,3 +879,47 @@ html:not(.want-landscape) #boot-gate { visibility: visible; }
 body.in-menu #topbar, body.in-menu #bottombar, body.in-menu #touchbar,
 body.in-menu #rail-tab, body.in-menu #message-feed, body.in-menu #selection-box,
 body.in-menu #order-banner { display: none !important; }
+body.in-menu #march-btn { display: none !important; }
+
+/* ---------- Defeat the Doom King: card, story overlay, crusade button ---------- */
+.mode-cards { flex-wrap: wrap; }
+.mode-card-doom { border-color: rgba(239,68,68,.42); background: linear-gradient(180deg, rgba(40,10,16,.96), rgba(12,8,14,.96)); }
+.mode-card-doom:hover, .mode-card-doom:focus-visible { border-color: #ef4444; box-shadow: 0 12px 40px rgba(239,68,68,.35); }
+.mode-card-doom .mode-name { color: #fca5a5; }
+
+#doom-story {
+  position: absolute; inset: 0; z-index: 46; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(120% 100% at 50% 0%, #2a0a12 0%, #08060a 72%);
+  padding: 16px; overflow-y: auto;
+}
+.ds-card {
+  width: min(560px, 94vw); max-height: 92vh; overflow-y: auto; text-align: left;
+  background: rgba(15,10,16,.94); border: 1px solid rgba(239,68,68,.35); border-radius: 20px;
+  padding: 22px 24px; color: #e5e7eb; line-height: 1.55;
+}
+.ds-card h2 { margin: 0 0 10px; color: #fca5a5; font-size: clamp(20px, 3.4vw, 28px); letter-spacing: .04em; }
+.ds-crown { font-size: 46px; filter: drop-shadow(0 0 18px rgba(239,68,68,.6)); }
+.ds-card p { margin: 0 0 10px; font-size: 14px; color: #cbd5e1; }
+.ds-card .ds-lead b { color: #fca5a5; }
+.ds-oath { font-style: italic; color: #fde68a; border-left: 3px solid #ef4444; padding-left: 12px; }
+.ds-steps { margin: 6px 0 12px; padding-left: 20px; }
+.ds-steps li { margin-bottom: 5px; font-size: 14px; color: #cbd5e1; }
+.ds-steps b { color: #fde68a; }
+.ds-win { color: #86efac; }
+.ds-lose { color: #fca5a5; }
+.ds-btns { display: flex; gap: 10px; margin-top: 14px; }
+.ds-btns button { flex: 1; padding: 13px; border-radius: 13px; font-weight: 900; font-size: 15px; cursor: pointer; min-height: 50px; touch-action: manipulation; }
+#doom-story-back { background: #1e293b; color: #e2e8f0; border: 1px solid #475569; }
+#doom-story-start { background: linear-gradient(180deg, #ef4444, #7f1d1d); color: #fff; border: 0; }
+
+#march-btn {
+  position: absolute; top: calc(56px + env(safe-area-inset-top, 0px)); right: 12px; z-index: 30;
+  display: inline-flex; align-items: center; gap: 8px; padding: 11px 16px; border-radius: 999px;
+  border: 1px solid rgba(239,68,68,.6); background: linear-gradient(180deg, #7f1d1d, #450a0a);
+  color: #fecaca; font-weight: 900; font-size: 14px; cursor: pointer; touch-action: manipulation;
+  box-shadow: 0 8px 26px rgba(239,68,68,.35); animation: mpulse 2.4s ease-in-out infinite;
+}
+#march-btn:active { transform: scale(.96); }
+#march-btn.used { animation: none; opacity: .78; }
+#march-btn .mb-icon { font-size: 16px; }
+@keyframes mpulse { 0%, 100% { box-shadow: 0 8px 26px rgba(239,68,68,.3); } 50% { box-shadow: 0 8px 34px rgba(239,68,68,.6); } }

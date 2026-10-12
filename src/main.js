@@ -4,6 +4,7 @@ import { AIManager } from './ai.js';
 import { HUD } from './ui.js';
 import { installRealms } from './realms.js';
 import { installWar } from './war.js';
+import { configureMode } from './config.js';
 import { listRooms, searchRooms, createRoom, joinRoom } from './rooms.js';
 import { loadWorkerModels, loadAdventurerModels } from './workers3d.js';
 import { loadBuildingModels } from './buildings3d.js';
@@ -155,10 +156,84 @@ function unmuteMusic() {
   window.addEventListener(ev, unmuteMusic, { passive: true })
 );
 
-let hud, ai;
+// The world is built lazily, only when the player picks a mode — so mode
+// configuration (map size, kingdom count, Doom rules) is applied before the
+// continent is generated. The menu backdrop is a CSS gradient.
+let hud, ai, game = null;
+let loopStarted = false;
+const clock = new THREE.Clock();
+const assets = { workerModels: null, buildingModels: null, adventurerModels: null };
+
+function hideAllMenus() {
+  for (const id of ['mode-select', 'rooms-screen', 'create-room-modal', 'lobby-screen', 'doom-story']) {
+    document.getElementById(id)?.classList.add('hidden');
+  }
+}
+
+// Build the world for the chosen mode. Called exactly once, from the menu.
+function startGame(mode) {
+  if (game) return game;
+  configureMode(mode);
+  game = new Game(canvas, {
+    onSelect: (sel) => hud?.onSelect(sel),
+    onMessage: (t) => hud?.message(t),
+    onGameOver: (win, sub) => hud?.showGameOver(win, sub),
+  }, assets);
+  ai = new AIManager(game);
+  installRealms(game, ai);
+  installWar(game, ai);
+  hud = new HUD(game, ai);
+  hud.onSelect([]);
+  const hq = game.hqOf(game.humanId);
+  if (hq) game.camTarget.set(hq.x, 0, hq.z);
+  game.setSelection([]);
+  wireMarchButton();
+  if (!loopStarted) { loopStarted = true; requestAnimationFrame(loop); }
+  return game;
+}
+
+function loop() {
+  requestAnimationFrame(loop);
+  if (!game) return;
+  try {
+    const dt = Math.min(clock.getDelta(), 0.05);
+    game.update(dt);
+    ai.update(dt);
+    hud.frame(dt);
+    game.render();
+  } catch (err) {
+    showError(err);
+    throw err;
+  }
+}
+
+function enterWorld(mode, msg) {
+  try { startGame(mode); } catch (err) { showError(err); return; }
+  hideAllMenus();
+  document.body.classList.remove('in-menu');
+  try { bgMusic?.play?.()?.catch?.(() => {}); } catch {}
+  game.hookMsg(msg);
+}
+
+// crusade control: only exists in Doom mode
+function wireMarchButton() {
+  const b = document.getElementById('march-btn');
+  if (!b) return;
+  if (!game?.doom) { b.classList.add('hidden'); return; }
+  b.classList.remove('hidden');
+  if (b.dataset.wired) return;
+  b.dataset.wired = '1';
+  b.addEventListener('click', () => {
+    if (game?.marchToDoomValley?.()) {
+      b.classList.add('used');
+      const t = b.querySelector('.mb-text');
+      if (t) t.textContent = 'Crusade underway';
+    }
+  });
+}
 
 // All assets (models + music) fully fetched on the splash: the game only
-// starts at 100% so nothing stalls mid-game for lack of resources.
+// builds at 100% so nothing stalls mid-game for lack of resources.
 async function boot() {
   setBoot(2);
   // 1) splash image decode (no half-painted art)
@@ -173,129 +248,77 @@ async function boot() {
     console.warn('bg music unavailable', err);
   }
   setBoot(20);
-  let workerModels = null, buildingModels = null, adventurerModels = null;
   try {
-    workerModels = await loadWorkerModels();
+    assets.workerModels = await loadWorkerModels();
     setBoot(44);
   } catch (err) {
     console.warn('worker models unavailable — falling back to box workers', err);
     setBoot(44);
   }
   try {
-    adventurerModels = await loadAdventurerModels();
+    assets.adventurerModels = await loadAdventurerModels();
     setBoot(64);
   } catch (err) {
     console.warn('adventurer models unavailable — workers fall back to Cave Man rigs', err);
     setBoot(64);
   }
   try {
-    buildingModels = await loadBuildingModels();
+    assets.buildingModels = await loadBuildingModels();
     setBoot(86);
   } catch (err) {
     console.warn('building models unavailable — falling back to box buildings', err);
     setBoot(86);
   }
-
-  setBoot(93);
-
-  // never leave the player on a frozen splash: surface boot crashes visibly
-  let game;
-  try {
-    game = new Game(canvas, {
-      onSelect: (sel) => hud?.onSelect(sel),
-      onMessage: (t) => hud?.message(t),
-      onGameOver: (win, time) => hud?.showGameOver(win, time),
-    }, { workerModels, buildingModels, adventurerModels });
-  } catch (err) {
-    bootGate?.remove();
-    showError(err);
-    throw err;
-  }
-
-  ai = new AIManager(game);
-  installRealms(game, ai);
-  installWar(game, ai);
-  hud = new HUD(game, ai);
-  hud.onSelect([]);
-
-  // starting camera on the human kingdom
-  {
-    const hq = game.hqOf(game.humanId);
-    if (hq) game.camTarget.set(hq.x, 0, hq.z);
-  }
-  game.setSelection([]);
-
-  const clock = new THREE.Clock();
-  function loop() {
-    requestAnimationFrame(loop);
-    try {
-      const dt = Math.min(clock.getDelta(), 0.05);
-      game.update(dt);
-      ai.update(dt);
-      hud.frame(dt);
-      game.render();
-    } catch (err) {
-      showError(err);
-      throw err;
-    }
-  }
   setBoot(100);
-  // Mode select at 100%: the world is built behind the menu (one painted
-  // frame as backdrop), and the loop only starts for single player.
-  let loopStarted = false;
-  const startLoop = () => {
-    if (loopStarted) return;
-    loopStarted = true;
-    loop();
-  };
+
+  // Mode select at 100% (CSS gradient backdrop). The world is not built yet.
   const showModes = () => {
     unmuteMusic();
     try { bgMusic?.play()?.catch?.(() => {}); } catch {}
     bootGate?.classList.add('done');
     setTimeout(() => bootGate?.remove(), 500);
-    try {
-      game.update(0.016);
-      ai.update(0.016);
-      hud.frame(0.016);
-      game.render();
-    } catch (err) { console.warn('menu backdrop', err); }
     document.getElementById('mode-select')?.classList.remove('hidden');
   };
-  const finishBoot = () => showModes();
-  wireMenu({ game, getHud: () => hud, startLoop });
+  wireMenu();
   // Autoplay policy: music already loops muted from the splash; if still
   // paused at 100%, one tap unlocks sound + enters (no earlier entry).
   const needTap = !!bgMusic && bgMusic.paused && musicReady;
   if (needTap && btnPlay) {
     btnPlay.classList.remove('hidden');
     setBoot(100);
-    btnPlay.addEventListener('click', () => {
-      finishBoot();
-    }, { once: true });
+    btnPlay.addEventListener('click', showModes, { once: true });
     bootGate?.addEventListener('pointerdown', () => btnPlay.click(), { once: true });
   } else {
     // small beat at 100% so players actually see the full bar like CoC
-    setTimeout(finishBoot, 450);
+    setTimeout(showModes, 450);
   }
 }
 // ---------- menu flow: mode select -> single player | rooms -> lobby -----
-function wireMenu({ game, getHud, startLoop }) {
+function wireMenu() {
   const $ = (id) => document.getElementById(id);
   const show = (el) => el?.classList.remove('hidden');
   const hide = (el) => el?.classList.add('hidden');
   const buzz = (ms = 10) => { try { navigator.vibrate?.(ms); } catch {} };
 
   const modeSel = $('mode-select'), roomsScr = $('rooms-screen');
-  const crModal = $('create-room-modal'), lobbyScr = $('lobby-screen');
+  const crModal = $('create-room-modal'), lobbyScr = $('lobby-screen'), doomStory = $('doom-story');
 
   // single player: enter the 12-kingdom saga
   $('mode-single')?.addEventListener('click', () => {
-    hide(modeSel);
-    document.body.classList.remove('in-menu');
     buzz(15);
-    try { bgMusic?.play?.()?.catch?.(() => {}); } catch {}
-    startLoop();
-    game.hookMsg('⚔️ Single player — you vs 11 AI kingdoms. Expand, wall, conquer!');
+    enterWorld('classic', '⚔️ Single player — you vs 11 AI kingdoms. Expand, wall, conquer!');
+  });
+  // doom mode: story overlay, then the 5-kingdom crusade
+  $('mode-doom')?.addEventListener('click', () => {
+    hide(modeSel); show(doomStory);
+    buzz(12);
+  });
+  $('doom-story-back')?.addEventListener('click', () => {
+    hide(doomStory); show(modeSel);
+  });
+  $('doom-story-start')?.addEventListener('click', () => {
+    buzz(18);
+    enterWorld('doom', '🌑 The Doom King rises! Hold the line, then sound the great crusade.');
   });
   // multiplayer: available rooms
   $('mode-multi')?.addEventListener('click', () => {
@@ -403,7 +426,7 @@ function wireMenu({ game, getHud, startLoop }) {
       mem.append(you, foe);
     }
     show(lobbyScr);
-    game.hookMsg?.(`🌐 Room “${room.name}” reserved — waiting for a rival lord.`);
+    game?.hookMsg?.(`🌐 Room “${room.name}” reserved — waiting for a rival lord.`);
   };
   $('btn-lobby-leave')?.addEventListener('click', () => {
     hide(lobbyScr); show(roomsScr);

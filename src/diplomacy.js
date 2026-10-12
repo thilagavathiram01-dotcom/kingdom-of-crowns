@@ -24,6 +24,18 @@ export class Diplomacy {
     return this.get(a, b).type === 'alliance';
   }
 
+  // coerced pacts: used by Doom mode to bind the free kingdoms together and
+  // lock the Doom King into permanent war (no payment, no ceremony).
+  forceAlliance(a, b) {
+    if (a === b) return;
+    this.relations.set(this.key(a, b), { type: 'alliance', until: Infinity });
+  }
+
+  forceWar(a, b, totalWar = false) {
+    if (a === b) return;
+    this.relations.set(this.key(a, b), { type: 'war', until: 0, totalWar: !!totalWar });
+  }
+
   underCeasefire(a, b) {
     const r = this.get(a, b);
     if (r.type !== 'ceasefire') return false;

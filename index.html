@@ -76,8 +76,36 @@
             <span class="mode-name">🛡️ Multiplayer</span>
             <span class="mode-desc">Rooms · face rival lords</span>
           </button>
+          <button id="mode-doom" class="mode-card mode-card-doom" type="button">
+            <img class="mode-thumb" src="mode-doom.jpg" alt="Defeat the Doom King — the dark host rises" loading="eager" decoding="async" />
+            <span class="mode-name">🌑 Defeat the Doom King</span>
+            <span class="mode-desc">Unite 5 crowns · storm Doomsvally</span>
+          </button>
         </div>
         <p class="mode-foot">Landscape recommended · sound on for war horns 🔊</p>
+      </div>
+    </div>
+
+    <!-- Doom King story: the tale, the oath, the stakes -->
+    <div id="doom-story" class="hidden" aria-live="polite">
+      <div class="ds-card">
+        <div class="ds-crown">🌑</div>
+        <h2>Defeat the Doom King</h2>
+        <p class="ds-lead">Four crowns warred over the land until the rivers ran red. Far beneath the black mountains, in the wastes men call <b>Doomsvally</b>, that slaughter stirred something older than any throne. Now the sky itself has begun to burn.</p>
+        <p>The <b>Doom King</b> has woken with an army already gathered, and it will not stop until every kingdom kneels or burns. The old laws of honour are dead. The only law left is this oath:</p>
+        <p class="ds-oath">“One crown may fall, but all crowns will stand together.”</p>
+        <ol class="ds-steps">
+          <li><b>Hold your ground</b> — raise your walls and your army before the first wave breaks.</li>
+          <li><b>Rally your neighbours</b> — the other three kingdoms are your allies; you command their soldiers too.</li>
+          <li><b>Grow strong</b> — mine the land, forge the host, and keep Doomsvally from swallowing the world.</li>
+          <li><b>March on Doomsvally</b> — sound the horn, and every crown strikes as one.</li>
+        </ol>
+        <p class="ds-win"><b>Win:</b> the Doom King is defeated.</p>
+        <p class="ds-lose"><b>Lose:</b> your kingdom falls, or the Doom King destroys all the kingdoms.</p>
+        <div class="ds-btns">
+          <button id="doom-story-back" type="button">‹ Back</button>
+          <button id="doom-story-start" type="button">🌑 Begin the War</button>
+        </div>
       </div>
     </div>
 
@@ -207,6 +235,11 @@
     </footer>
 
     <div id="message-feed" aria-live="polite"></div>
+
+    <!-- Doom mode: the great crusade -->
+    <button id="march-btn" class="hidden" type="button" title="Order every kingdom to march on Doomsvally">
+      <span class="mb-icon">🌑</span><span class="mb-text">March on Doomsvally</span>
+    </button>
 
     <div id="err-overlay" class="hidden">
       <h2>Something broke</h2>

@@ -633,6 +633,15 @@ export class KingdomBrain {
       }
     }
 
+    // ---- great crusade: once the human sounds the horn, every ally throws
+    // its host at Doomsvally regardless of local opportunity ----
+    if (this.crusadeTarget && this.crusadeTarget !== this.owner
+      && this.isAlive(this.crusadeTarget) && !this.wave && sendable >= 4) {
+      this._betrayNext = false;
+      this.launch('invade', this.crusadeTarget, avail.slice(0, sendable), hq);
+      return;
+    }
+
     // ---- total war: no other target matters until the foe falls ----
     const tw = g.diplomacy?.totalWarWith?.(this.owner);
     if (tw && this.isAlive(tw) && !this.wave && sendable >= 4) {
