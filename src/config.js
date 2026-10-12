@@ -79,9 +79,9 @@ export const CONFIG = {
     tick: 0.7,
     defendRadius: 42,
     thinkEvery: [2.2, 3.6],
-    maxWorkers: [8, 12],
-    maxArmy: [14, 28],
-    maxBarracks: [3, 5],
+    maxWorkers: [9, 15],
+    maxArmy: [20, 34],
+    maxBarracks: [4, 6],
     fortHalf: [16, 21],
     gateWidth: 10,
     wallStep: 4.6,
@@ -90,6 +90,7 @@ export const CONFIG = {
   },
 
   terrain: {
+    water: true,          // rivers/water only exist in classic mode
     waterLevel: -1.0,
     blockHeight: 5.0,
     riverWidth: 11,
@@ -120,6 +121,8 @@ export function configureMode(mode) {
   CONFIG.mapSize = m.mapSize;
   CONFIG.kingdoms = m.kingdoms;
   CONFIG.kingdomSpacing = m.kingdomSpacing;
+  // Doomsvally is a dry, all-land battlefield — no river to hide behind
+  CONFIG.terrain.water = _mode !== 'doom';
   return _mode;
 }
 export function currentMode() { return _mode; }
@@ -141,6 +144,11 @@ export const DOOM = {
   stock: { wood: 1500, food: 1200 },
   aggression: 1.7,       // war-readiness multiplier (rushes far sooner)
   waveGapSec: [55, 110], // relentless wave cadence
+  raidGapSec: [20, 48],  // gap between harassment raids
+  raidShare: 0.4,        // share of the standing host sent per raid
+  raidMax: 9,            // never more than this many in one raiding party
+  visitChance: 0.3,      // chance a "raid" is only a border visit + return
+  crusadeMinArmy: 6,     // an ally with fewer fighters than this refuses to march
 };
 
 // ---- Streamlined 2-Resource Economy: Wood (chopped) + Food (mills & farms) ----

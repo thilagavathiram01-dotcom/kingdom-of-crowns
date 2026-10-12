@@ -177,6 +177,7 @@ function startGame(mode) {
   game = new Game(canvas, {
     onSelect: (sel) => hud?.onSelect(sel),
     onMessage: (t) => hud?.message(t),
+    onToast: (t) => hud?.toast(t),
     onGameOver: (win, sub) => hud?.showGameOver(win, sub),
   }, assets);
   ai = new AIManager(game);
@@ -188,6 +189,7 @@ function startGame(mode) {
   if (hq) game.camTarget.set(hq.x, 0, hq.z);
   game.setSelection([]);
   wireMarchButton();
+  wireReleaseButton();
   if (!loopStarted) { loopStarted = true; requestAnimationFrame(loop); }
   return game;
 }
@@ -218,16 +220,33 @@ function enterWorld(mode, msg) {
 // crusade control: only exists in Doom mode
 function wireMarchButton() {
   const b = document.getElementById('march-btn');
+  const rb = document.getElementById('release-btn');
   if (!b) return;
-  if (!game?.doom) { b.classList.add('hidden'); return; }
+  if (!game?.doom) { b.classList.add('hidden'); rb?.classList.add('hidden'); return; }
   b.classList.remove('hidden');
   if (b.dataset.wired) return;
   b.dataset.wired = '1';
   b.addEventListener('click', () => {
     if (game?.marchToDoomValley?.()) {
-      b.classList.add('used');
       const t = b.querySelector('.mb-text');
-      if (t) t.textContent = 'Crusade underway';
+      if (t) t.textContent = 'Gather more kingdoms';
+      rb?.classList.remove('hidden');
+    }
+  });
+}
+
+// send every allied crusader home again at any time
+function wireReleaseButton() {
+  const rb = document.getElementById('release-btn');
+  if (!rb) return;
+  if (!game?.doom) { rb.classList.add('hidden'); return; }
+  if (rb.dataset.wired) return;
+  rb.dataset.wired = '1';
+  rb.addEventListener('click', () => {
+    if (game?.releaseDoomCrusade?.()) {
+      rb.classList.add('hidden');
+      const t = document.querySelector('#march-btn .mb-text');
+      if (t) t.textContent = 'March on Doomsvally';
     }
   });
 }

@@ -467,7 +467,11 @@ export class KingdomBrain {
     if (!this.wave && !threat) this.raidIntrusion(S, hq);
 
     if (!threat) {
-      if (this.wave) this.status = `${this.wave.kind === 'revenge' ? 'Revenge on' : 'Invading'} ${g.players[this.wave.foe]?.name || ''}`;
+      if (this.wave) {
+        const k = this.wave.kind, who = g.players[this.wave.foe]?.name || '';
+        this.status = k === 'revenge' ? `Revenge on ${who}`
+          : k === 'raid' ? `Raiding ${who}` : k === 'visit' ? `Scouting ${who}` : `Invading ${who}`;
+      }
       else if (S.army.length >= 4) this.status = `Mustering (${S.army.length})…`;
       else this.status = 'Growing…';
     }
@@ -487,6 +491,7 @@ export class KingdomBrain {
     for (let guard = 0; guard < 10; guard++) {
       S.logs = pl.logs;
       const supplyFree = S.supplyUsed + hq.queue.length + armyQ < S.supplyMax + 2;
+      const blocked = S.supplyUsed >= S.supplyMax - 2;
       const opts = [];
 
       // workers
@@ -499,7 +504,6 @@ export class KingdomBrain {
       // barracks: the only source of supply + army production
       // more mouths to feed and more supply → more production (no clock)
       const goalRax = Math.min(P.maxBarracks, 1 + Math.floor(S.supplyUsed / 8) + Math.floor(S.army.length / 6));
-      const blocked = S.supplyUsed >= S.supplyMax - 2;
       if (S.rax.length < P.maxBarracks && (blocked || S.rax.length < goalRax) && S.workers.length >= 4) {
         opts.push({ k: 'barracks', u: blocked ? 1.1 : 0.55 + 0.1 * (goalRax - S.rax.length), cost: CONFIG.barracksCost,
           go: () => {
@@ -727,7 +731,7 @@ export class KingdomBrain {
       marchLimit: 50 + d / 4.2,
     };
     for (const u of units) this.orderTo(u, stage.x, stage.z, true);
-    g.aiWarNote?.(this.owner, foe, 'invasion');
+    g.aiWarNote?.(this.owner, foe, (kind === 'raid' || kind === 'visit') ? kind : 'invasion');
   }
 
   orderTo(u, x, z, attackMove) {
@@ -761,8 +765,11 @@ export class KingdomBrain {
 
     if (w.phase === 'march') {
       const near = alive.filter(u => Math.hypot(u.x - w.stage.x, u.z - w.stage.z) < 20).length;
-      if (near >= alive.length * 0.65 || g.time - w.t0 > w.marchLimit) { w.phase = 'assault'; }
-      else {
+      if (near >= alive.length * 0.65 || g.time - w.t0 > w.marchLimit) {
+        // a "visit" is reconnaissance only: it reaches the border and withdraws
+        if (w.kind === 'visit') return this.endWave('visited');
+        w.phase = 'assault';
+      } else {
         for (const u of alive) if (!u.hasOrder && !u.target) this.orderTo(u, w.stage.x, w.stage.z, true);
         return;
       }
@@ -856,6 +863,12 @@ export class AIManager {
     const g = this.game;
     const now = g.time;
     const involvesHuman = g.isHuman(a) || g.isHuman(b);
+    if (kind === 'raid' || kind === 'visit') {
+      if (involvesHuman && kind === 'raid') {
+        g.hookMsg(`🌑 ${g.players[a].name} hurls a raiding party at ${g.isHuman(b) ? 'YOU' : g.players[b].name}!`);
+      }
+      return;
+    }
     if (involvesHuman) {
       if (kind === 'invasion') g.hookMsg(`⚠️ ${g.players[a].name} invades ${g.isHuman(b) ? 'YOU' : g.players[b].name}!`);
       return;

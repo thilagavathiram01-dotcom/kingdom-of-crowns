@@ -879,7 +879,7 @@ html:not(.want-landscape) #boot-gate { visibility: visible; }
 body.in-menu #topbar, body.in-menu #bottombar, body.in-menu #touchbar,
 body.in-menu #rail-tab, body.in-menu #message-feed, body.in-menu #selection-box,
 body.in-menu #order-banner { display: none !important; }
-body.in-menu #march-btn { display: none !important; }
+body.in-menu #march-btn, body.in-menu #release-btn { display: none !important; }
 
 /* ---------- Defeat the Doom King: card, story overlay, crusade button ---------- */
 .mode-cards { flex-wrap: wrap; }
@@ -922,4 +922,17 @@ body.in-menu #march-btn { display: none !important; }
 #march-btn:active { transform: scale(.96); }
 #march-btn.used { animation: none; opacity: .78; }
 #march-btn .mb-icon { font-size: 16px; }
+#march-btn .mb-text { white-space: nowrap; }
+
+#release-btn {
+  position: absolute; top: calc(56px + env(safe-area-inset-top, 0px)); right: 12px; z-index: 30;
+  margin-top: 52px;
+  display: inline-flex; align-items: center; gap: 8px; padding: 11px 16px; border-radius: 999px;
+  border: 1px solid rgba(148,163,184,.6); background: linear-gradient(180deg, #334155, #1e293b);
+  color: #e2e8f0; font-weight: 900; font-size: 14px; cursor: pointer; touch-action: manipulation;
+  box-shadow: 0 8px 26px rgba(15,23,42,.45);
+}
+#release-btn:active { transform: scale(.96); }
+#release-btn .mb-icon { font-size: 16px; }
+#release-btn .mb-text { white-space: nowrap; }
 @keyframes mpulse { 0%, 100% { box-shadow: 0 8px 26px rgba(239,68,68,.3); } 50% { box-shadow: 0 8px 34px rgba(239,68,68,.6); } }

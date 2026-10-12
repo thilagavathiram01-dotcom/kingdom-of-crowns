@@ -6,6 +6,8 @@ import { CONFIG, HQ_LEVELS, NEW_HQ_COST, MAX_HQ_PER_KINGDOM, DOOM, MODES, config
 import { Game } from './src/game.js';
 import { KingdomBrain } from './src/ai.js';
 import { Diplomacy } from './src/diplomacy.js';
+import { generateTerrain, onBridge } from './src/terrain.js';
+import { doomRaid } from './src/war.js';
 
 let pass = 0, fail = 0;
 const ok = (n, c, d = '') => { if (c) { pass++; console.log('PASS', n); } else { fail++; console.log('FAIL', n, d); } };
@@ -839,8 +841,11 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   configureMode('doom');
   ok('doom king + three allies defined', DOOM.doomIdx === 1 && DOOM.allyIds.length === 3);
   ok('doom king starts armed', DOOM.startArmy >= 10 && DOOM.startBarracks >= 2 && DOOM.hqLevel >= 2);
+  ok('doom removes the water (all land)', CONFIG.terrain.water === false);
+  ok('doom raid + crusade tuning present', DOOM.raidMax >= 3 && DOOM.crusadeMinArmy >= 1);
   configureMode('classic');
   ok('classic restored', CONFIG.kingdoms === classic.kingdoms && CONFIG.mapSize === classic.mapSize);
+  ok('classic keeps its river', CONFIG.terrain.water === true);
 }
 
 // ---------- 26. Doom mode: coerced diplomacy ----------
@@ -890,32 +895,137 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   ok('doom: allies wiped → lose', g.over && g._res.w === false);
 }
 
-// ---------- 29. Doom mode: the great crusade ----------
+// ---------- 29. Doom mode: the great crusade (gather / refuse / release) ----------
 {
   const g = fakeGame();
   g.doom = true; g.over = false; g.doomKing = 'k1';
-  g.players = { k0: { id: 'k0', alive: true }, k1: { id: 'k1', alive: true }, k2: { id: 'k2', alive: true } };
+  g.players = {
+    k0: { id: 'k0', name: 'You', alive: true },
+    k1: { id: 'k1', name: 'Doom King', alive: true },
+    k2: { id: 'k2', name: 'Ash Kingdom', alive: true },
+    k3: { id: 'k3', name: 'Birch Kingdom', alive: true },
+  };
+  g.controllable = new Set(['k0', 'k2', 'k3']);
+  g.diplomacy = new Diplomacy(g);
+  g.hookMsg = () => {}; g.warHorn = () => {}; g._brainOf = () => null;
+  g.musterFormation = () => {};
+  g._crusadeWillingness = () => 1; // both allies willing in this run
+  let moves = 0; g.orderMove = () => { moves++; };
+  let sel = null; g.setSelection = (l) => { sel = l; };
+  g.buildings = [
+    { id: 1, owner: 'k1', type: 'hq', dead: false, x: 200, z: 200, level: 3 },
+    { id: 2, owner: 'k0', type: 'hq', dead: false, x: 0, z: 0, level: 1 },
+    { id: 3, owner: 'k2', type: 'hq', dead: false, x: -150, z: 0, level: 1 },
+    { id: 4, owner: 'k3', type: 'hq', dead: false, x: 0, z: -150, level: 1 },
+  ];
+  g.hqOf = (o) => g.buildings.find(b => b.owner === o && b.type === 'hq' && !b.dead);
+  g.hqRadiusOf = () => 70;
+  g.units = [
+    { id: 1, owner: 'k0', type: 'soldier', dead: false },
+    { id: 2, owner: 'k2', type: 'brute', dead: false },
+    { id: 3, owner: 'k2', type: 'brute', dead: false },
+    { id: 4, owner: 'k2', type: 'soldier', dead: false },
+    { id: 5, owner: 'k2', type: 'soldier', dead: false },
+    { id: 6, owner: 'k2', type: 'brute', dead: false },
+    { id: 7, owner: 'k2', type: 'soldier', dead: false },
+    { id: 8, owner: 'k2', type: 'worker', dead: false },
+    { id: 9, owner: 'k3', type: 'soldier', dead: false },
+    { id: 10, owner: 'k3', type: 'soldier', dead: false },
+    { id: 11, owner: 'k3', type: 'brute', dead: false },
+    { id: 12, owner: 'k3', type: 'soldier', dead: false },
+    { id: 13, owner: 'k3', type: 'soldier', dead: false },
+    { id: 14, owner: 'k3', type: 'brute', dead: false },
+  ];
+  const r = g.marchToDoomValley();
+  ok('crusade gathers the willing kingdoms', r === true && g.crusade === true);
+  ok('crusade marshals the joined host at your keep', moves >= 2);
+  ok('crusade auto-selects the gathered host', Array.isArray(sel) && sel.length === 13);
+  ok('crusade locks the doom king in war', g.diplomacy.get('k1', 'k0').type === 'war');
+  ok('crusade allies the free kingdoms', g.diplomacy.isAllied('k0', 'k2'));
+  ok('crusade records which kingdoms joined', g.crusadeJoiners.has('k2') && g.crusadeJoiners.has('k3'));
+
+  // release sends every ally home and clears the crusade
+  let relMoves = 0; g.orderMove = () => { relMoves++; };
+  const rr = g.releaseDoomCrusade();
+  ok('release returns allied troops to their kingdoms', rr === true && relMoves >= 2 && g.crusade === false);
+  ok('release forgets the joiners', g.crusadeJoiners.size === 0);
+}
+
+// ---------- 30. Doom mode: allies may refuse; the king only raids partially ----------
+{
+  const g = fakeGame();
+  g.doom = true; g.over = false; g.doomKing = 'k1';
+  g.players = {
+    k0: { id: 'k0', name: 'You', alive: true },
+    k1: { id: 'k1', name: 'Doom King', alive: true },
+    k2: { id: 'k2', name: 'Ash Kingdom', alive: true },
+  };
   g.controllable = new Set(['k0', 'k2']);
   g.diplomacy = new Diplomacy(g);
   g.hookMsg = () => {}; g.warHorn = () => {}; g._brainOf = () => null;
-  let moves = 0; g.orderAttackMove = () => { moves++; };
   g.musterFormation = () => {};
+  g._crusadeWillingness = () => 1;
+  g.orderMove = () => {}; g.setSelection = () => {};
   g.buildings = [
     { id: 1, owner: 'k1', type: 'hq', dead: false, x: 200, z: 200 },
     { id: 2, owner: 'k0', type: 'hq', dead: false, x: 0, z: 0 },
   ];
   g.hqOf = (o) => g.buildings.find(b => b.owner === o && b.type === 'hq' && !b.dead);
+  g.hqRadiusOf = () => 70;
+  // k2 fields a single fighter — too few to march, so it must refuse
   g.units = [
     { id: 1, owner: 'k0', type: 'soldier', dead: false },
-    { id: 2, owner: 'k2', type: 'worker', dead: false },
-    { id: 3, owner: 'k2', type: 'brute', dead: false },
+    { id: 2, owner: 'k2', type: 'soldier', dead: false },
   ];
-  const r = g.marchToDoomValley();
-  ok('crusade orders the host to march', r === true && g.crusade === true && moves >= 2);
-  ok('crusade locks the doom king in war', g.diplomacy.get('k1', 'k0').type === 'war');
-  ok('crusade allies the free kingdoms', g.diplomacy.isAllied('k0', 'k2'));
-  const once = moves; g.marchToDoomValley();
-  ok('crusade can be re-issued', moves > once);
+  g.marchToDoomValley();
+  ok('an ally with too few troops refuses the call',
+    !g.crusadeJoiners.has('k2') && g.crusadeRefusers.some(x => x.id === 'k2'));
+
+  // the Doom King's doctrine: a PARTIAL party at a random kingdom
+  configureMode('doom');
+  const G = fakeGame();
+  G.time = 100;
+  G.players = { k1: { id: 'k1', name: 'Doom King', alive: true }, k2: { id: 'k2', name: 'Ash', alive: true } };
+  G.aliveKingdoms = () => ['k1', 'k2'];
+  G.hqOf = (o) => (o === 'k2' ? { x: 100, z: 0 } : { x: 0, z: 0 });
+  const army = new Array(20).fill(0).map((_, i) => ({ id: i, type: 'brute', owner: 'k1', dead: false }));
+  const br = { owner: 'k1', raidAt: 0, status: '', available: () => army, launch: () => {} };
+  let launched = null;
+  br.launch = (kind, foe, party) => { launched = { kind, foe, n: party.length }; };
+  doomRaid(G, br, {}, { x: 0, z: 0 });
+  ok('doom raid sends only a partial party', launched && launched.n >= 3 && launched.n <= DOOM.raidMax);
+  ok('doom raid keeps most of its host at home', launched && launched.n < army.length);
+  ok('doom raid targets another kingdom', launched && launched.foe === 'k2');
+  ok('doom raid is a raid or a visit', launched && (launched.kind === 'raid' || launched.kind === 'visit'));
+  configureMode('classic');
+}
+
+// ---------- 31. Doom map: all land + the king spawns at the centre ----------
+{
+  configureMode('doom');
+  const T = generateTerrain(CONFIG.mapSize, [], 4242, []);
+  let watery = 0, probes = 0;
+  for (let x = -200; x <= 200; x += 25) {
+    for (let z = -200; z <= 200; z += 25) {
+      probes++;
+      if (T.sample(x, z) < CONFIG.terrain.waterLevel + 0.25) watery++;
+    }
+  }
+  ok('doom map is dry land everywhere', watery === 0, `watery=${watery}/${probes}`);
+  ok('doom map has no bridges', onBridge(0, -150) === false);
+  ok('doom map blocks no water', !T.blocked(0, 0));
+  configureMode('classic');
+
+  // spawn ordering: the most central pick becomes Doomsvally, player pushed out
+  const g = fakeGame();
+  g.kingdomSpawns = [
+    { x: 150, z: 150 }, { x: -160, z: 140 }, { x: 10, z: -8 },
+    { x: -140, z: -150 }, { x: 120, z: -140 },
+  ];
+  g.orderDoomSpawns();
+  const d = g.kingdomSpawns[DOOM.doomIdx];
+  ok('doom kingdom spawns at the map centre', Math.hypot(d.x, d.z) < 20);
+  ok('the player is pushed off the centre', Math.hypot(g.kingdomSpawns[0].x, g.kingdomSpawns[0].z) > 100);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

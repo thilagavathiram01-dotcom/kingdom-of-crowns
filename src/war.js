@@ -89,6 +89,27 @@ function buildingCount(game, brain) {
   return n;
 }
 
+// The Doom King's war doctrine: partial raids + visits, never a full push.
+export function doomRaid(game, br, S, hq) {
+  if (br.wave) return;                       // one party out at a time
+  const now = game.time ?? 0;
+  if (now < (br.raidAt || 0)) return;
+  const avail = br.available(S);
+  const guard = Math.max(4, Math.ceil(avail.length * 0.55)); // keep most home
+  const spare = Math.max(0, avail.length - guard);
+  if (spare < 3 || avail.length < 4) { br.raidAt = now + 10 + Math.random() * 16; return; }
+  const foes = game.aliveKingdoms().filter(id => id !== br.owner);
+  if (!foes.length) return;
+  const foe = foes[Math.floor(Math.random() * foes.length)];
+  if (!game.hqOf(foe)) { br.raidAt = now + 10; return; }
+  const want = Math.max(3, Math.min(DOOM.raidMax, Math.round(avail.length * DOOM.raidShare)));
+  const party = avail.slice(0, Math.min(want, spare));
+  const visit = Math.random() < (DOOM.visitChance ?? 0.3);
+  br.raidAt = now + DOOM.raidGapSec[0] + Math.random() * (DOOM.raidGapSec[1] - DOOM.raidGapSec[0]);
+  br.status = `${visit ? 'Scouting' : 'Raiding'} ${game.players[foe]?.name || ''}…`;
+  br.launch(visit ? 'visit' : 'raid', foe, party, hq);
+}
+
 export function chooseTarget(game, brain, candidates) {
   // score: grudge+ / weak+ / close+ / shard+ / leader+ / walled- / allied excluded
   let best = null, bs = -1e9;
@@ -159,13 +180,21 @@ export function installWar(game, ai) {
       fortReady: 0.25, attackRatio: 0.5, maxWars: 99, waveMin: 4,
       reach: 9999, waveGap: [DOOM.waveGapSec[0], DOOM.waveGapSec[1]],
     });
+    // The Doom King never throws its whole host at one wall. Instead it hurls
+    // small raiding parties (and the odd scouting "visit") at RANDOM kingdoms,
+    // again and again, while the rest of its host holds Doomsvally and grows.
+    if (br.doom) {
+      br.raidAt = 0;
+      br.considerWar = (S, hq) => doomRaid(game, br, S, hq);
+    }
     const rawLaunch = br.launch?.bind(br);
     if (rawLaunch) {
       br.launch = (kind, foe, units, myHq, objectiveOverride = null) => {
         const maxWars = br.P?.maxWars ?? th.maxWars;
         if ((br.activeWars || 0) >= maxWars && !br.crusadeTarget) return;
-        // early guard: no day-one rushes (readiness gate, not a timer)
-        if (buildingCount(game, br) < WAR.minBuildings && kind !== 'revenge' && !br.crusadeTarget) return;
+        // early guard: no day-one rushes (readiness gate, not a timer).
+        // The Doom King is exempt — its raids ARE the early pressure.
+        if (!br.doom && buildingCount(game, br) < WAR.minBuildings && kind !== 'revenge' && !br.crusadeTarget) return;
         // pact-bound target? this is betrayal — pay mobilization or stand down.
         // (challenged windows break free; alliances/ceasefires cost the fee.)
         const pact = game.diplomacy?.get(br.owner, foe)?.type;

@@ -421,20 +421,20 @@ export class Game {
     return ring;
   }
 
-  // Doomsvally rises as far from the player's throne as the map allows, so the
-  // dark host is a real march away. Swap the human's farthest pick into the
-  // Doom King's slot (index DOOM.doomIdx).
+  // Doomsvally rises at the dark heart of the map. Swap the most central pick
+  // into the Doom King's slot (index DOOM.doomIdx) and push the displaced
+  // kingdom out to where the Doom King's slot used to be.
   orderDoomSpawns() {
-    const home = this.kingdomSpawns[0];
-    let bi = 1, bd = -1;
-    for (let i = 1; i < this.kingdomSpawns.length; i++) {
-      const d = Math.hypot(this.kingdomSpawns[i].x - home.x, this.kingdomSpawns[i].z - home.z);
-      if (d > bd) { bd = d; bi = i; }
+    const idx = DOOM.doomIdx;
+    let ci = 0, cd = Infinity;
+    for (let i = 0; i < this.kingdomSpawns.length; i++) {
+      const s = this.kingdomSpawns[i];
+      const d = Math.hypot(s.x, s.z);
+      if (d < cd) { cd = d; ci = i; }
     }
-    const slot = DOOM.doomIdx;
-    const tmp = this.kingdomSpawns[slot];
-    this.kingdomSpawns[slot] = this.kingdomSpawns[bi];
-    this.kingdomSpawns[bi] = tmp;
+    const tmp = this.kingdomSpawns[idx];
+    this.kingdomSpawns[idx] = this.kingdomSpawns[ci];
+    this.kingdomSpawns[ci] = tmp;
   }
 
   // Doomsvally: level-3 fortress, extra barracks, a big standing army and a
@@ -459,6 +459,17 @@ export class Game {
         this.spawnBuilding('barracks', id, spot.x, spot.z);
       }
       for (let k = 0; k < DOOM.startWorkers - 3; k++) this.spawnUnit('worker', id, s.x - 3 - k * 1.5, s.z + 5);
+      // a self-sufficient dark settlement: food, housing and a forge so the
+      // Doom King can keep growing population, tech and its host after the start
+      const support = ['mill', 'smith', 'archery', 'house', 'house'];
+      support.forEach((t, k) => {
+        const a = (k / support.length) * Math.PI * 2 + 2.1;
+        const rr = this.hqRadiusOf(hq) * 0.75;
+        const bx = THREE.MathUtils.clamp(s.x + Math.cos(a) * rr, -H + 6, H - 6);
+        const bz = THREE.MathUtils.clamp(s.z + Math.sin(a) * rr, -H + 6, H - 6);
+        const spot = this.findFreeSpot(bx, bz, (CONFIG.buildings[t]?.size || 3) * 0.72 + 0.5);
+        this.spawnBuilding(t, id, spot.x, spot.z);
+      });
       const army = [];
       for (let k = 0; k < DOOM.startArmy; k++) army.push(k % 4 === 3 ? 'hunter' : 'soldier');
       for (let k = 0; k < DOOM.startBrutes; k++) army.push('brute');
@@ -469,45 +480,121 @@ export class Game {
       });
       st.age = 2; // Doomsvally already knows castle warfare
     } else if (id !== this.humanId && this.controllable.has(id)) {
-      // allies: hand them a second barracks' worth of defenders
+      // allies: hand them a developed head start so the free kingdoms can
+      // actually grow, expand and field a real army beside the player
       const st = this.players[id];
-      st.wood = Math.round(st.wood * 1.4); st.logs = st.wood;
-      st.food = Math.round(st.food * 1.4);
-      for (let k = 0; k < 3; k++) this.spawnUnit('soldier', id, s.x - 4 - k, s.z + 8);
+      st.wood = Math.round(st.wood * 1.8); st.logs = st.wood;
+      st.food = Math.round(st.food * 1.8);
+      st.age = Math.max(st.age || 0, 1);
+      for (let k = 0; k < 4; k++) this.spawnUnit('worker', id, s.x - 4 - k, s.z + 8);
+      for (let k = 0; k < 5; k++) this.spawnUnit(k % 2 ? 'brute' : 'soldier', id, s.x - 4 - k, s.z + 11);
+      const a = Math.PI * 0.5;
+      const bx = THREE.MathUtils.clamp(s.x + Math.cos(a) * 9, -H + 6, H - 6);
+      const bz = THREE.MathUtils.clamp(s.z + Math.sin(a) * 9, -H + 6, H - 6);
+      if (this.isSpotFree(bx, bz, 3)) this.spawnBuilding('mill', id, bx, bz);
     }
   }
 
-  // Rally every living kingdom into one crusade and send the host at
-  // Doomsvally. Called from the HUD button (and from the story overlay).
+  // Call the Great Crusade. Every free kingdom is ASKED to send its warriors;
+  // a kingdom with too few troops (or a cautious lord) may refuse. Willing
+  // armies march to the player's muster ring and join the player's own host —
+  // the whole thing is auto-selected so the player can throw it at Doomsvally.
   marchToDoomValley() {
     if (!this.doom || this.over) return false;
     const doom = this.players[this.doomKing];
     const target = this.hqOf(this.doomKing);
-    if (!doom || !doom.alive || !target) { this.hookMsg('🌑 Doomsvally is already broken.'); return false; }
-    // end any standing pacts between the living so nobody holds back
+    const home = this.hqOf(this.humanId);
+    if (!doom || !doom.alive || !target) { this._toast('🌑 Doomsvally is already broken.'); return false; }
+    if (!home) return false;
+
+    // nobody holds back: bind the free kingdoms and lock the war with evil
     const ids = this.aliveKingdoms().filter(id => id !== this.doomKing);
     if (this.diplomacy) {
       for (let i = 0; i < ids.length; i++) {
-        for (let j = i + 1; j < ids.length; j++) {
-          this.diplomacy.forceAlliance?.(ids[i], ids[j]);
-        }
+        for (let j = i + 1; j < ids.length; j++) this.diplomacy.forceAlliance?.(ids[i], ids[j]);
         this.diplomacy.forceWar?.(this.doomKing, ids[i]); // no pact with evil
       }
     }
-    this.crusade = true;
+
+    // muster ring set in front of the player's keep, facing Doomsvally
+    const dx = target.x - home.x, dz = target.z - home.z, d = Math.hypot(dx, dz) || 1;
+    const R = this.hqRadiusOf ? this.hqRadiusOf(home) : 70;
+    const mx = home.x + (dx / d) * R * 0.8, mz = home.z + (dz / d) * R * 0.8;
+
+    const joiners = [], refusers = [], host = [];
+    this.crusadeJoiners = new Set();
     for (const id of ids) {
-      for (const u of this.units) {
-        if (u.dead || u.owner !== id || u.type === 'worker') continue;
-        const a = (u.id % 12) / 12 * Math.PI * 2;
-        const r = 20 + (u.id % 5) * 3;
-        this.orderAttackMove([u], target.x + Math.cos(a) * r, target.z + Math.sin(a) * r);
+      const army = this.units.filter(u => !u.dead && u.owner === id && u.type !== 'worker');
+      // the human always marches; allies weigh their strength and their nerve
+      if (id !== this.humanId) {
+        const willing = army.length >= DOOM.crusadeMinArmy
+          && (this._crusadeWillingness?.(id, army.length) ?? 0) > Math.random();
+        if (!willing) { refusers.push({ id, n: army.length }); continue; }
       }
+      this.crusadeJoiners.add(id);
+      joiners.push({ id, n: army.length });
+      for (const u of army) { u.musterHold = false; u.holdPosition = false; host.push(u); }
+      if (army.length) this.orderMove(army, mx, mz);
       this.musterFormation?.(id, this.doomKing);
-      if (this._brainOf?.(id)) this._brainOf(id).crusadeTarget = this.doomKing;
+      const br = this._brainOf?.(id);
+      if (br) { br.crusadeTarget = this.doomKing; br.opT = 0; }
     }
+
+    this.crusade = true;
+    this.crusadeHost = host;
+    this.crusadeRefusers = refusers;
+
+    // hand the gathered host to the player as one selection
+    if (host.length) {
+      try { this.setSelection(host); this.camTarget?.set?.(mx, 0, mz); } catch { /* headless */ }
+    }
+
+    // tell the player exactly who answered the call
+    const jn = joiners.map(j => `${this.players[j.id].name} (${j.n})`);
+    const rn = refusers.map(r => `${this.players[r.id].name} (${r.n})`);
+    if (jn.length) this._toast(`🛡️ ${jn.join(', ')} send troops — ${host.length} warriors marshalled at your keep.`);
+    if (rn.length) this._toast(`🚫 ${rn.join(', ')} refuse to march — too few warriors.`);
+    this._toast('Tap the gathered host, then send it at Doomsvally. Use Release to send allies home.');
     this.warHorn?.();
-    this.hookMsg('🌑🔥 THE GREAT CRUSADE — every crown marches on Doomsvally!');
+    this.hookMsg('🌑🔥 THE GREAT CRUSADE — the free kingdoms gather at your banner!');
     try { this.hooks?.onCrusade?.(); } catch { /* headless */ }
+    return true;
+  }
+
+  // how keen an ally is to march: bigger hosts and warlike lords are likelier.
+  // (Deliberately independent of any clock.)
+  _crusadeWillingness(id, n) {
+    const br = this._brainOf?.(id);
+    const base = 0.42 + Math.min(0.5, (n || 0) / 40);
+    const mil = br?.P?.militarism ?? 0.5;
+    return THREE.MathUtils.clamp(base + (mil - 0.5) * 0.3, 0.15, 0.98);
+  }
+
+  // fire a transient toast (HUD) as well as the message feed
+  _toast(t) {
+    try { this.hooks?.onToast?.(t); } catch { /* headless */ }
+    this.hookMsg(t);
+  }
+
+  // Send every allied crusader home to its own kingdom at any time.
+  releaseDoomCrusade() {
+    if (!this.doom) return false;
+    const ids = [...(this.crusadeJoiners || [])].filter(id => id !== this.humanId);
+    let n = 0;
+    for (const id of ids) {
+      const hq = this.hqOf(id);
+      const army = this.units.filter(u => !u.dead && u.owner === id && u.type !== 'worker');
+      n += army.length;
+      if (hq && army.length) this.orderMove(army, hq.x, hq.z);
+      const br = this._brainOf?.(id);
+      if (br) br.crusadeTarget = null;
+    }
+    this.crusade = false;
+    this.crusadeJoiners = new Set();
+    this.crusadeHost = [];
+    if (this.selected?.length) this.setSelection(this.selected.filter(u => this.canControl(u.owner)));
+    if (ids.length) this._toast(`🏳️ Released — ${n} allied warriors return to their kingdoms.`);
+    else this._toast('🏳️ Crusade released.');
     return true;
   }
 
@@ -2193,6 +2280,8 @@ export class Game {
     return b;
   }
 
+  // generic building constructor for the AI: enforces age/prereq locks, charges
+  // the real cost, then spawns at a free spot near (x,z).
   // no messages, no selection: used by the AI and the starter keeps
   placeWallRaw(owner, x, z, rot = 0, len) {
     const p = this.players[owner];
@@ -2787,8 +2876,8 @@ export class Game {
       }
     }
 
-    // water shimmer + river foam drift
-    if (this.waterFx) {
+    // water shimmer + river foam drift (classic mode only)
+    if (this.waterFx?.waterMat) {
       this.waterFx.waterMat.opacity = 0.74 + Math.sin(this.time * 1.3) * 0.05;
       for (const s of this.waterFx.streaks) {
         s.m.position.z += s.speed * dt;

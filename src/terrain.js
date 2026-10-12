@@ -82,7 +82,7 @@ export function scoreSite(T, x, z) {
   const c = T && T.sample ? T.sample(x, z) : 0;
   worst = Math.max(worst, c);
   const riverD = Math.abs(x - riverX(z));
-  const riverPenalty = riverD < 16 ? (16 - riverD) * 2 : 0;
+  const riverPenalty = CONFIG.terrain.water && riverD < 16 ? (16 - riverD) * 2 : 0;
   return Math.max(0, worst - 2.5) * 4 + water * 30 + riverPenalty;
 }
 export function riverX(z) {
@@ -90,6 +90,7 @@ export function riverX(z) {
 }
 
 export function onBridge(x, z) {
+  if (!CONFIG.terrain.water) return false;
   for (const zb of CONFIG.terrain.bridges) {
     if (Math.abs(z - zb) < CONFIG.terrain.bridgeHalf + 2.5 &&
         Math.abs(x - riverX(zb)) < 17) return true;
@@ -139,11 +140,13 @@ export function generateTerrain(size, flattenSpots = [], seed = 1337, repelSpots
         const dx = x - p.x, dz = z - p.z;
         y += p.h * peakGain * Math.exp(-(dx * dx + dz * dz) / (2 * p.s * p.s));
       }
-      // river carve
-      const rd = Math.abs(x - riverX(z));
-      if (rd < CONFIG.terrain.riverWidth + 6) {
-        const t = 1 - Math.min(1, rd / (CONFIG.terrain.riverWidth + 6));
-        y -= Math.pow(t, 1.4) * 6.5;
+      // river carve (water modes only — Doomsvally is all land)
+      if (CONFIG.terrain.water) {
+        const rd = Math.abs(x - riverX(z));
+        if (rd < CONFIG.terrain.riverWidth + 6) {
+          const t = 1 - Math.min(1, rd / (CONFIG.terrain.riverWidth + 6));
+          y -= Math.pow(t, 1.4) * 6.5;
+        }
       }
       // map rim rises into border cliffs
       const rim = Math.max(Math.abs(x), Math.abs(z)) / H;
@@ -151,11 +154,19 @@ export function generateTerrain(size, flattenSpots = [], seed = 1337, repelSpots
       h[idx(ix, iz)] = y;
     }
   }
+  // no-water mode: lift every low pocket above the water line so the whole
+  // field reads as solid ground (flat plains instead of seas)
+  if (!CONFIG.terrain.water) {
+    const floor = CONFIG.terrain.waterLevel + 0.8;
+    for (let i = 0; i < h.length; i++) if (h[i] < floor) h[i] = floor;
+  }
   // flatten base sites + bridge corridors
   const T0 = { size, H, STEP, N, h };
   for (const s of flattenSpots) applyFlatten(T0, s.x, s.z, s.r || 14, 0.5, 2.5);
-  for (const zb of CONFIG.terrain.bridges) {
-    applyFlatten(T0, riverX(zb), zb, 20, 0.5, 1.0);
+  if (CONFIG.terrain.water) {
+    for (const zb of CONFIG.terrain.bridges) {
+      applyFlatten(T0, riverX(zb), zb, 20, 0.5, 1.0);
+    }
   }
 
   const sample = (x, z) => {
@@ -206,8 +217,9 @@ export function buildTerrainVisuals(scene, T, opts = {}) {
     // slope estimate
     const sl = Math.abs(T.sample(x + 2, z) - y) + Math.abs(T.sample(x, z + 2) - y);
     const n = noise(x * 0.05, z * 0.05) * 0.5 + 0.5;
-    if (y < WL + 0.5) tmp.copy(cBed).lerp(cSand, THREE.MathUtils.clamp((y - WL + 1.5) / 2, 0, 1));
-    else if (y < WL + 1.4) tmp.copy(cSand);
+    const water = CONFIG.terrain.water;
+    if (water && y < WL + 0.5) tmp.copy(cBed).lerp(cSand, THREE.MathUtils.clamp((y - WL + 1.5) / 2, 0, 1));
+    else if (water && y < WL + 1.4) tmp.copy(cSand);
     else if (y > 11.5) tmp.copy(cSnow);
     else if (y > CONFIG.terrain.blockHeight || sl > 2.2) tmp.copy(cRock).lerp(cSnow, THREE.MathUtils.clamp((y - 8) / 6, 0, 1));
     else {
@@ -225,34 +237,36 @@ export function buildTerrainVisuals(scene, T, opts = {}) {
   ground.name = 'terrain-ground';
   scene.add(ground);
 
-  // --- water ---
+  // --- water (classic mode only) ---
   const waterMat = new THREE.MeshStandardMaterial({
     color: 0x1e6f8e, transparent: true, opacity: 0.78, roughness: 0.2, metalness: 0.35,
   });
-  const water = new THREE.Mesh(new THREE.PlaneGeometry(size, size), waterMat);
-  water.rotation.x = -Math.PI / 2;
-  water.position.y = WL;
-  water.receiveShadow = true;
-  scene.add(water);
-
-  // drifting foam streaks on the river
-  const streakMat = new THREE.MeshBasicMaterial({ color: 0xbfe9ff, transparent: true, opacity: 0.35, depthWrite: false });
   const streaks = [];
-  const streakGeo = new THREE.PlaneGeometry(1.6, 5);
-  for (let i = 0; i < 36; i++) {
-    const m = new THREE.Mesh(streakGeo, streakMat);
-    m.rotation.x = -Math.PI / 2;
-    const z = (rng() - 0.5) * size;
-    m.position.set(riverX(z) + (rng() - 0.5) * 8, WL + 0.06, z);
-    scene.add(m);
-    streaks.push({ m, speed: 1.5 + rng() * 2 });
+  if (CONFIG.terrain.water) {
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(size, size), waterMat);
+    water.rotation.x = -Math.PI / 2;
+    water.position.y = WL;
+    water.receiveShadow = true;
+    scene.add(water);
+
+    // drifting foam streaks on the river
+    const streakMat = new THREE.MeshBasicMaterial({ color: 0xbfe9ff, transparent: true, opacity: 0.35, depthWrite: false });
+    const streakGeo = new THREE.PlaneGeometry(1.6, 5);
+    for (let i = 0; i < 36; i++) {
+      const m = new THREE.Mesh(streakGeo, streakMat);
+      m.rotation.x = -Math.PI / 2;
+      const z = (rng() - 0.5) * size;
+      m.position.set(riverX(z) + (rng() - 0.5) * 8, WL + 0.06, z);
+      scene.add(m);
+      streaks.push({ m, speed: 1.5 + rng() * 2 });
+    }
   }
 
-  // --- bridges (deck across the river, spanning X) ---
+  // --- bridges (classic mode only) ---
   const woodMat = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 0.9 });
   const woodDark = new THREE.MeshStandardMaterial({ color: 0x4e3319, roughness: 0.9 });
   const lampMat = new THREE.MeshStandardMaterial({ color: 0xffd27a, emissive: 0xffb84d, emissiveIntensity: 1.6 });
-  for (const zb of CONFIG.terrain.bridges) {
+  for (const zb of (CONFIG.terrain.water ? CONFIG.terrain.bridges : [])) {
     const xb = riverX(zb);
     const grp = new THREE.Group();
     const deck = new THREE.Mesh(new THREE.BoxGeometry(34, 0.6, 7), woodMat);
@@ -292,7 +306,7 @@ export function buildTerrainVisuals(scene, T, opts = {}) {
   const obstacles = opts.obstacles; // shared array to fill with colliders
   const avoid = opts.avoid || [];   // [{x,z,r}] keep-outs (bases, bridges)
   const clearOf = (x, z, pad) => {
-    if (Math.abs(x - riverX(z)) < CONFIG.terrain.riverWidth + pad) return false;
+    if (CONFIG.terrain.water && Math.abs(x - riverX(z)) < CONFIG.terrain.riverWidth + pad) return false;
     if (T.sample(x, z) < WL + 0.8 || T.sample(x, z) > 4.6) return false;
     for (const a of avoid) if (Math.hypot(x - a.x, z - a.z) < a.r + pad) return false;
     if (T.blocked(x, z)) return false;
@@ -355,7 +369,7 @@ export function buildTerrainVisuals(scene, T, opts = {}) {
     const x = (rng() - 0.5) * (size - 8), z = (rng() - 0.5) * (size - 8);
     const y = T.sample(x, z);
     if (y < WL + 0.6 || y > 5.5) continue;
-    if (Math.abs(x - riverX(z)) < CONFIG.terrain.riverWidth) continue;
+    if (CONFIG.terrain.water && Math.abs(x - riverX(z)) < CONFIG.terrain.riverWidth) continue;
     dummy.position.set(x, y + 0.35, z);
     dummy.scale.set(0.7 + rng(), 0.7 + rng() * 1.2, 0.7 + rng());
     dummy.rotation.y = rng() * Math.PI;
@@ -401,8 +415,8 @@ export function buildTerrainVisuals(scene, T, opts = {}) {
       const x = (px / 180 - 0.5) * size, z = (py / 180 - 0.5) * size;
       const y = T.sample(x, z);
       let r, g, b;
-      if (y < WL) { r = 30; g = 110; b = 140; }
-      else if (y < WL + 1.4) { r = 150; g = 135; b = 95; }
+      if (CONFIG.terrain.water && y < WL) { r = 30; g = 110; b = 140; }
+      else if (CONFIG.terrain.water && y < WL + 1.4) { r = 150; g = 135; b = 95; }
       else if (y > 11.5) { r = 225; g = 235; b = 245; }
       else if (y > CONFIG.terrain.blockHeight) { r = 95; g = 102; b = 115; }
       else { r = 38; g = 92; b = 48; }
