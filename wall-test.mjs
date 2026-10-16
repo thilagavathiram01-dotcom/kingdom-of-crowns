@@ -114,15 +114,37 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   ok('the wall line itself is blocked', g.pointBlocked(-4.7, 0, 0.75));
 }
 
-// ---------- 6. no automatic walls ----------
+// ---------- 6. conditional automatic walls ----------
 {
   const g = fakeGame();
   ok('starter keeps are removed', typeof g.buildStarterKeep !== 'function');
-  g.players.k2 = { id: 'k2', idx: 2, logs: 5000, color: 0x22c55e, alive: true };
+  g.players.k2 = { id: 'k2', idx: 2, logs: 5000, wood: 5000, color: 0x22c55e, alive: true };
   const brain = new KingdomBrain(g, 'k2');
+  g.spawnBuilding('hq', 'k0', 100, 0); // a foe due east sets the wall facing
   brain.planFort({ x: 0, z: 0 });
-  ok('the AI plans no wall slots', brain.walls.length === 0);
-  ok('missing walls never gate the AI', brain.fortProgress() === 1);
+  ok('the AI plans a conditional palisade', brain.walls.length > 0, `walls=${brain.walls.length}`);
+  ok('wall bands cover foe arc, flanks and an open rear', (() => {
+    const p = new Set(brain.walls.map(w => w.prio));
+    return p.has(0) && p.has(1) && p.has(2);
+  })());
+  ok('unbuilt towers gate the fort, not walls', brain.fortProgress() === 0);
+  ok('gate lanes stay open in the wall plan', (() => {
+    for (const q of brain.fort.gates) {
+      const gp = brain.fort.pt(q.side, q.off);
+      for (const w of brain.walls) if (Math.hypot(w.x - gp.x, w.z - gp.z) < brain.fort.gw * 0.5) return false;
+    }
+    return true;
+  })());
+  ok('the foe-facing wall goes up first', (() => {
+    const foe = brain.walls.filter(w => w.prio === 0).length;
+    const built = brain.buildNextWall(false);
+    const done = brain.walls.filter(w => w.prio === 0 && w.b && !w.b.dead).length;
+    return foe > 0 && built === true && done === 1;
+  })());
+  ok('the open rear is never walled', (() => {
+    for (let i = 0; i < 60; i++) brain.buildNextWall(true);
+    return brain.walls.filter(w => w.prio >= 2 && w.b && !w.b.dead).length === 0;
+  })());
   ok('the fort frame still stages the army', (() => {
     const s = brain.homeStage();
     return Number.isFinite(s.x) && Number.isFinite(s.z);
@@ -133,15 +155,15 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   })());
 }
 
-// ---------- 7. AI fort frame stages in the open (no wall slots) ----------
+// ---------- 7. AI fort frame stages in the open (conditional wall plan) ----------
 {
   const g = fakeGame();
-  g.players.k2 = { id: 'k2', idx: 2, logs: 5000, color: 0x22c55e, alive: true };
+  g.players.k2 = { id: 'k2', idx: 2, logs: 5000, wood: 5000, color: 0x22c55e, alive: true };
   g.kingdomSpawns = [{ x: 0, z: 0 }];
   g.kingdomSpawns.push({ x: 200, z: 0 });
   const brain = new KingdomBrain(g, 'k2');
   brain.planFort({ x: 0, z: 0 });
-  ok('no fort wall slots are planned', brain.walls.length === 0);
+  ok('a fort wall plan is laid out', brain.walls.length > 0, `walls=${brain.walls.length}`);
   ok('towers are still planned as defense', brain.towers.length > 0, `towers=${brain.towers.length}`);
   ok('the muster point is on open ground', (() => {
     const s = brain.homeStage();

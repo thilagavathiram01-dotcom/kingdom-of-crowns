@@ -202,12 +202,40 @@ export class KingdomBrain {
 
     const g1 = pt(gates[0].side, gates[0].off);
 
-    // ---- walls: disabled. Kingdoms no longer raise automatic fort walls:
-    // armies and workers were getting trapped behind their own palisades and
-    // could not find the gates. Only hand-placed player walls exist now.
-    // The fort frame (gates, staging point) is kept for mustering, and
-    // towers are still built as gate/area defense.
+    // ---- walls: a GATED palisade, raised only where it matters ----
+    // Full automatic rings trapped the AI's own army behind its walls, so
+    // walls are now planned but CONDITIONALLY built (see buildNextWall):
+    // the foe-facing arc goes up first, the flanks only under threat or with a
+    // real timber surplus, and the rear is left open so the garrison can always
+    // walk out. Gate lanes and tower footprints are skipped so the muster
+    // point and its kill-zones stay clear.
     const walls = [];
+    const step = A.wallStep;
+    const halfOf = (s) => (s === 0 || s === 2) ? hx : hz;
+    const rotOf = (s) => (s === 0 || s === 2) ? 0 : Math.PI / 2;
+    for (let s = 0; s < 4; s++) {
+      const out = { x: -INWARD[s].x, z: -INWARD[s].z }; // outward normal
+      const facing = out.x * fd.x + out.z * fd.z;      // 1 = straight at the foe
+      const prio = facing > 0.45 ? 0 : facing > -0.45 ? 1 : 2; // 2 = rear, rarely built
+      const half = halfOf(s);
+      const n = Math.max(1, Math.round((2 * half) / step));
+      for (let i = 0; i < n; i++) {
+        const t = -half + step * (i + 0.5);
+        let gap = false;
+        for (const q of gates) if (q.side === s && Math.abs(t - q.off) < gw / 2 + step * 0.5) gap = true;
+        if (Math.abs(t) > half - TOWER_CLEAR()) gap = true; // corner towers
+        if (gap) continue;
+        const p = pt(s, t);
+        walls.push({ x: p.x, z: p.z, rot: rotOf(s), prio, b: null, retryAt: 0 });
+      }
+    }
+    // funnel first: pieces nearest a gate, then by priority band
+    const gateDist = (w) => {
+      let d = 1e9;
+      for (const q of gates) { const gp = pt(q.side, q.off); d = Math.min(d, Math.hypot(w.x - gp.x, w.z - gp.z)); }
+      return d;
+    };
+    walls.sort((a, b) => a.prio - b.prio || gateDist(a) - gateDist(b));
 
     // ---- towers: gate flanks first (kill zone), then corners facing the foe ----
     const towers = [];
@@ -251,11 +279,12 @@ export class KingdomBrain {
   }
 
   fortProgress() {
-    // automatic walls are disabled, so there is nothing to wait for
-    if (!this.walls.length) return 1;
+    // walls are conditional, so progress (and the invasion gate that reads it)
+    // is measured on the ALWAYS-planned towers instead.
+    if (!this.towers.length) return 1;
     let n = 0;
-    for (const w of this.walls) if (w.b && !w.b.dead) n++;
-    return n / this.walls.length;
+    for (const t of this.towers) if (t.b && !t.b.dead) n++;
+    return n / this.towers.length;
   }
 
   // ---------------------------------------------------------------- building
@@ -313,6 +342,17 @@ export class KingdomBrain {
     return best;
   }
 
+  // nearest of a set of own buildings to (x,z)
+  nearestOwnBuilding(list, x, z) {
+    let best = null, bd = 1e9;
+    for (const b of list) {
+      if (!b || b.dead) continue;
+      const d = Math.hypot(b.x - x, b.z - z);
+      if (d < bd) { bd = d; best = b; }
+    }
+    return best;
+  }
+
   buildNextTower() {
     const g = this.game, id = this.owner, now = g.time, r = TURRET_R();
     for (const t of this.towers) {
@@ -323,6 +363,41 @@ export class KingdomBrain {
       const b = g.buildTurret(id, t.x, t.z);
       if (b) { t.b = b; return true; }
       t.retryAt = now + 20;
+    }
+    return false;
+  }
+
+  // Raise the next planned wall piece — but only when it is warranted:
+  // under threat/recent damage, or with timber to spare. Foe-facing (prio 0)
+  // first; flanks (prio 1) only when pressed or rich; the rear is never walled
+  // so the garrison always has a way out.
+  buildNextWall(threat) {
+    const g = this.game, id = this.owner, now = g.time, P = this.P;
+    if (!this.walls.length) return false;
+    const st = g.players[id];
+    const surplus = st.wood ?? st.logs ?? 0;
+    const need = !!threat || (now - this.hitT) < 120;
+    const halfWall = CONFIG.buildings.wall.size * 0.5;
+    for (const w of this.walls) {
+      if (w.b && !w.b.dead) continue;
+      w.b = null;
+      if (w.retryAt > now) continue;
+      if (w.prio >= 2) continue;                         // the rear stays open
+      if (!need) {
+        if (w.prio >= 1 && surplus < 220) continue;      // flanks need a cushion
+        if (surplus < 140) continue;                     // keep some for the army
+      }
+      if (st.logs < CONFIG.wallCost) continue;
+      if (!g.wallSpotFree(w.x, w.z, w.rot)) { w.retryAt = now + 10 + Math.random() * 8; continue; }
+      // never brick in our own units: skip while any friendly stands on the line
+      let unitNear = false;
+      g.eachNear(w.x, w.z, halfWall + 1.4, (u) => {
+        if (u.owner === id && !u.dead) { unitNear = true; return false; }
+      });
+      if (unitNear) { w.retryAt = now + 5; continue; }
+      const b = g.placeWallRaw(id, w.x, w.z, w.rot);
+      if (b) { w.b = b; return true; }
+      w.retryAt = now + 12;
     }
     return false;
   }
@@ -360,7 +435,7 @@ export class KingdomBrain {
   gather() {
     const g = this.game, id = this.owner;
     const S = {
-      workers: [], army: [], hq: null, rax: [], prod: [], turrets: [], walls: 0,
+      workers: [], army: [], hq: null, rax: [], prod: [], turrets: [], walls: 0, mills: [],
       logs: g.players[id].logs, supplyUsed: 0, supplyMax: g.supplyMax(id),
       age: g.players[id].age || 0,
     };
@@ -375,6 +450,7 @@ export class KingdomBrain {
       else if (b.type === 'barracks') { S.rax.push(b); S.prod.push(b); }
       else if (['archery', 'stable', 'siege', 'temple'].includes(b.type)) S.prod.push(b);
       else if (b.type === 'turret') S.turrets.push(b);
+      else if (b.type === 'mill') S.mills.push(b);
       else S.walls++;
     }
     return S;
@@ -428,6 +504,10 @@ export class KingdomBrain {
           u.tx = drop.x; u.tz = drop.z;
           u.hasOrder = true; u.attackMove = false;
         } else if (u.retreating && u.hp / u.maxHp > 0.75) u.retreating = false;
+        // wedged home unit (boxed by walls/units): unstick it and muster afresh
+        else if (!u.retreating && !u.target && (u.stuckN || 0) >= 2) {
+          u.hasOrder = false; u.path = null; u.repathT = 0; u.stuckN = 0; u.fireAnchor = null;
+        }
         // idle army musters at the gate instead of wandering
         else if (!u.retreating && !u.target && !u.hasOrder && Math.hypot(u.x - stage.x, u.z - stage.z) > 16) {
           const spot = g.rallySpotFor({ rallyX: stage.x, rallyZ: stage.z }, u.type, u.id % 8);
@@ -437,19 +517,25 @@ export class KingdomBrain {
       }
     }
 
-    // ---- 2. ECONOMY: workers always harvesting logs (continuous) ----
-    // mill hands are exempt — they stay at their mill, not chopped to trees
+    // ---- 2. ECONOMY: every hand stays productive (harvest, haul, or mill) ----
+    // Also the anti-stuck pass: workers whose tree ran out, who were never
+    // assigned, or who are wedged are re-tasked here instead of idling.
+    const CARRY = CONFIG.resource?.carryMax ?? 10;
     for (const w of S.workers) {
       w.retreating = false;
       if (w.assignedMill) continue;
-      if ((!w.hasOrder && !g.resourceReady(w.harvestTarget) && w.carrying === 0) || (w.harvestTarget && !g.resourceReady(w.harvestTarget))) {
-        w.harvestTarget = g.nearestResource(w.x, w.z);
-        w.returning = false;
-        // idle full-loop: if carrying logs but no order, send home, else chop
-        if (w.carrying > 0 && !w.returning) {
-          const hq2 = g.hqOf(this.owner);
-          if (hq2) { const drop = g.hqDropSpot(hq2, w); w.returning = true; w.dropX = drop.x; w.dropZ = drop.z; w.dropFor = hq2.id; w.tx = drop.x; w.tz = drop.z; w.hasOrder = true; w.path = null; }
-        }
+      if (w.returning || w.carrying >= CARRY) continue; // engine handles the drop run
+      const ready = w.harvestTarget && g.resourceReady(w.harvestTarget);
+      if (ready) continue;
+      // stale / missing target -> assign the nearest standing tree
+      const node = g.nearestResource(w.x, w.z) || g.nearestResource(hq.x, hq.z);
+      if (node) { g.orderHarvest([w], node); continue; }
+      // timber exhausted nearby: put the hand on a mill, else hold by the keep
+      const mill = this.nearestOwnBuilding(S.mills, w.x, w.z);
+      if (mill && (mill.workers || []).length < 4) { g.assignToMill([w], mill); continue; }
+      if (!w.hasOrder) {
+        w.tx = stage.x + rand(-5, 5); w.tz = stage.z + rand(-5, 5);
+        w.hasOrder = true; w.attackMove = false; w.path = null;
       }
     }
 
@@ -493,10 +579,11 @@ export class KingdomBrain {
       const blocked = S.supplyUsed >= S.supplyMax - 2;
       const opts = [];
 
-      // workers
+      // workers — an empty kingdom trains hands FIRST, even when supply-tight
       const nW = S.workers.length + hq.queue.length;
-      if (nW < P.targetWorkers && hq.queue.length < 2 && S.supplyUsed < S.supplyMax) {
-        opts.push({ k: 'worker', u: 0.9 * (P.targetWorkers - nW) / P.targetWorkers + (nW < 5 ? 0.5 : 0), cost: CONFIG.workerCost,
+      if (nW < P.targetWorkers && hq.queue.length < 2 && (S.supplyUsed < S.supplyMax || nW === 0)) {
+        opts.push({ k: 'worker', res: g.unitCostRes('worker'),
+          u: nW === 0 ? 2.0 : 0.9 * (P.targetWorkers - nW) / P.targetWorkers + (nW < 5 ? 0.5 : 0),
           go: () => g.trainUnit(hq, 'worker') });
       }
 
@@ -520,7 +607,7 @@ export class KingdomBrain {
         const type = this.chooseUnit(S);
         const prod = this.producerFor(S, type);
         if (prod) {
-          opts.push({ k: 'army', u: 0.6 + 0.5 * P.militarism * (1 - S.army.length / Math.max(1, wantNow)), cost: g.unitCost(type),
+          opts.push({ k: 'army', res: g.unitCostRes(type), u: 0.6 + 0.5 * P.militarism * (1 - S.army.length / Math.max(1, wantNow)),
             go: () => g.trainUnit(prod, type) });
         }
       }
@@ -535,16 +622,27 @@ export class KingdomBrain {
           cost: CONFIG.turretCost, go: () => { const ok = this.buildNextTower(); if (ok) S.turrets.push({}); return ok; } });
       }
 
-      // (automatic walls removed: the AI musters in the open and never
-      // traps its own army behind a palisade)
+      // walls: a GATED palisade, raised only where it matters (foe-facing arc
+      // first; flanks only when pressed or rich). buildNextWall decides the rest.
+      if (this.walls.length) {
+        const builtW = this.walls.filter(w => w.b && !w.b.dead).length;
+        const needW = !!threat || recentHit;
+        const foeArc = this.walls.filter(w => w.prio === 0).length;
+        const wallTarget = needW ? this.walls.length : foeArc;
+        if (builtW < wallTarget) {
+          opts.push({ k: 'wall', cost: CONFIG.wallCost, u: needW ? 0.95 : P.fortLove * 0.45,
+            go: () => this.buildNextWall(threat) });
+        }
+      }
 
       if (!opts.length) break;
       for (const o of opts) o.u *= 0.85 + Math.random() * 0.3;
       opts.sort((a, b) => b.u - a.u);
 
+      const afford = (o) => o.res ? g.canAffordRes(id, o.res) : pl.logs >= o.cost;
       let acted = false;
       for (const o of opts) {
-        if (pl.logs >= o.cost) {
+        if (afford(o)) {
           if (o.go()) { acted = true; break; }
         } else if (o.u >= 0.7) {
           // important and unaffordable: save up instead of wasting logs on small stuff
