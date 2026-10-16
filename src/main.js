@@ -7,6 +7,7 @@ import { installWar } from './war.js';
 import { configureMode } from './config.js';
 import { listRooms, searchRooms, createRoom, joinRoom } from './rooms.js';
 import { loadWorkerModels, loadAdventurerModels, loadPeasantModels } from './workers3d.js';
+import { loadTroopModels } from './troopkit.js';
 import { loadBuildingModels } from './buildings3d.js';
 
 // visible error surface: never freeze silently — show what broke
@@ -162,7 +163,7 @@ function unmuteMusic() {
 let hud, ai, game = null;
 let loopStarted = false;
 const clock = new THREE.Clock();
-const assets = { workerModels: null, buildingModels: null, adventurerModels: null, peasantModels: null };
+const assets = { workerModels: null, buildingModels: null, adventurerModels: null, peasantModels: null, troopModels: null };
 
 function hideAllMenus() {
   for (const id of ['mode-select', 'rooms-screen', 'create-room-modal', 'lobby-screen', 'doom-story']) {
@@ -287,6 +288,13 @@ async function boot() {
   } catch (err) {
     console.warn('peasant models unavailable — workers fall back to adventurer rigs', err);
     setBoot(74);
+  }
+  try {
+    assets.troopModels = await loadTroopModels();
+    setBoot(80);
+  } catch (err) {
+    console.warn('troop models unavailable — falling back to procedural troopers', err);
+    setBoot(80);
   }
   try {
     assets.buildingModels = await loadBuildingModels();

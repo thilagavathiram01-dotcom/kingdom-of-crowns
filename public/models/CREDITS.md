@@ -14,6 +14,7 @@ downloading — packs and terms can change.
 | Fantasy characters (animated) | Quaternius | https://quaternius.com | CC0 | Knight, ranger |
 | Medieval Builder pack | KayKit | https://kaylousberg.itch.io | CC0 tier | Worker builder |
 | Adventurers / Skeletons | KayKit | https://kaylousberg.itch.io | CC0 tier | Swordsman, archer |
+| Character Pack: Adventurers (knight, barbarian, mage, rogue) | KayKit | https://kaylousberg.itch.io/kaykit-adventurers | CC0 | Soldier, knight, archer, brute, healer, spy, heroes |
 | Medieval 3D people (peasants, men + women) | Craftpix / Free Game Assets | https://craftpix.net/freebies/free-medieval-3d-people-low-poly-models/ | Craftpix free (royalty-free, unlimited projects) | Worker villagers |
 | Audio pack | Kenney | https://kenney.nl/assets | CC0 | UI + battle sounds |
 

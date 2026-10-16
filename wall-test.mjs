@@ -9,6 +9,7 @@ import { Diplomacy } from './src/diplomacy.js';
 import { generateTerrain, onBridge } from './src/terrain.js';
 import { doomRaid } from './src/war.js';
 import { PEASANTS, PEASANT_SCALE } from './src/workers3d.js';
+import { TROOP_SPEC, TROOP_SCALE } from './src/troopkit.js';
 
 let pass = 0, fail = 0;
 const ok = (n, c, d = '') => { if (c) { pass++; console.log('PASS', n); } else { fail++; console.log('FAIL', n, d); } };
@@ -1044,6 +1045,20 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   let atlas = 0;
   try { atlas = readFileSync('public/textures/peasant_atlas.png').length; } catch { /* missing */ }
   ok('the peasant texture atlas ships in the build', atlas > 500);
+}
+
+// ---------- 34. KayKit Adventurer troop models ----------
+{
+  const want = ['soldier', 'swordsman', 'spearman', 'knight', 'archer', 'scout', 'spy', 'healer', 'brute', 'hunter', 'hero_king', 'hero_champion', 'hero_archmage'];
+  ok('every humanoid class maps to a troop model', want.every(t => TROOP_SPEC[t]));
+  const chars = new Set(Object.values(TROOP_SPEC).map(s => s.char));
+  ok('troop spec uses the adventurer characters', chars.size >= 4 && [...chars].every(c => ['knight', 'barbarian', 'mage', 'rogue', 'rogue_hooded'].includes(c)));
+  ok('troop scale stands a soldier', TROOP_SCALE > 0.6 && TROOP_SCALE < 1.4);
+  let files = 0;
+  for (const c of ['knight', 'barbarian', 'mage', 'rogue', 'rogue_hooded']) {
+    try { if (readFileSync(`public/models/troops/${c}.glb`).length > 100000) files++; } catch { /* missing */ }
+  }
+  ok('all five troop models ship in the build', files === 5, `files=${files}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

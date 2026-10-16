@@ -5,6 +5,7 @@ import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE, cre
 import { buildingModel } from './buildings3d.js';
 import { kitBuilding, kitUnit } from './kit.js';
 import { buildTrooper, updateTrooper } from './troops3d.js';
+import { createTroopRig, updateTroopRig, TROOP_HEIGHT } from './troopkit.js';
 
 let UID = 1;
 // decorative overlays (territory discs, underglows, rings, bars, rally lines)
@@ -55,6 +56,8 @@ export class Game {
     this.adventurerModels = !!assets.adventurerModels;
     // Craftpix medieval peasants (men + women) as the natural worker look
     this.peasantModels = !!assets.peasantModels;
+    // KayKit Adventurers troop models (knight/barbarian/mage/rogue), or null
+    this.troopModels = !!assets.troopModels;
     // KayKit castle/barracks/tower/wall models, or null -> procedural boxes
     this.buildingModels = !!assets.buildingModels;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -675,9 +678,20 @@ export class Game {
     if (type === 'worker' && this.peasantModels) rig = createPeasantRig(this.teamColor(owner));
     if (!rig && type === 'worker' && this.adventurerModels) rig = createAdventurerRig(this.teamColor(owner), ADVENTURER_SCALE);
     if (!rig && cav && this.workerModels) rig = createWorkerRig(this.teamColor(owner), WORKER_SCALE * cav);
+    // real KayKit Adventurers models for every humanoid soldier (brute, archer,
+    // knight, heroes …), with the procedural troopers kept as the fallback
+    let troopRig = null;
+    if (!rig && this.troopModels) troopRig = createTroopRig(type, this.teamColor(owner));
     const mat = new THREE.MeshStandardMaterial({ color: this.teamColor(owner), roughness: 0.6 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
-    if (type === 'worker') {
+    if (troopRig) {
+      g.add(troopRig.root);
+      // cheap team-coloured stand-in shown only past the LOD ring
+      body = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 0.9, 4, 8), mat);
+      body.position.y = 0.95;
+      body.visible = false;
+      g.userData.kitHeight = TROOP_HEIGHT;
+    } else if (type === 'worker') {
       // box stays as the far-LOD stand-in once the Cave Man rig takes over
       body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.9), mat);
       body.position.y = 0.55;
@@ -780,7 +794,7 @@ export class Game {
     this.scene.add(g);
     const u = {
       id: UID++, kind: 'unit', type, owner, mesh: g, gem, ring, bar, body, rig,
-      trooper: g.userData.trooper || null,
+      trooper: g.userData.trooper || null, troopRig,
       x, z, hp: st.hp, maxHp: st.hp, speed: st.speed,
       damage: st.damage, range: st.range, cooldown: st.cooldown, aggro: st.aggro,
       radius: st.radius, cd: Math.random() * 0.3, tx: x, tz: z, hasOrder: false,
@@ -2871,6 +2885,24 @@ export class Game {
     }
   }
 
+  // troop rig LOD: same idea as the workers — only rigs near the camera run
+  // their skinned animation; distant ones collapse to the (invisible) body box.
+  updateTroop(u, dt, moved) {
+    const r = u.troopRig;
+    const near = Math.hypot(u.x - this.camTarget.x, u.z - this.camTarget.z) < 95;
+    if (near !== r.root.visible) {
+      r.root.visible = near;
+      if (u.body) u.body.visible = !near;
+    }
+    if (!near) return;
+    const v = dt > 0 ? moved / dt : 0;
+    if (u._walkOn === undefined) u._walkOn = v > u.speed * 0.3;
+    else if (u._walkOn) { if (v < u.speed * 0.15) u._walkOn = false; }
+    else if (v > u.speed * 0.35) u._walkOn = true;
+    const attacking = (u.lastShotT ?? 99) < 0.35;
+    updateTroopRig(r, dt, u._walkOn, v || u.speed, attacking, false);
+  }
+
   update(dt) {
     if (this.over) return;
     this.time += dt;
@@ -3002,6 +3034,7 @@ export class Game {
       }
       // selection ring pulse + worker cargo gem
       if (u.rig) { u.rig.carrying = u.carrying > 0; this.updateWorkerRig(u, dt, moved); }
+      else if (u.troopRig) this.updateTroop(u, dt, moved);
       else if (u.trooper) updateTrooper(u.trooper, dt, moved, u.speed, (u.lastShotT ?? 99) < 0.35);
       if (u.gem) u.gem.visible = u.carrying > 0;
       if (u.ring.visible) {
@@ -3083,8 +3116,8 @@ export class Game {
       const u = this.units[i];
       if (u.dead && u.deathT !== undefined) {
         u.deathT -= dt;
-        u.mesh.scale.multiplyScalar(1 - dt * 2);
-        u.mesh.position.y -= dt;
+        if (u.troopRig) updateTroopRig(u.troopRig, dt, false, 0, false, true);
+        else { u.mesh.scale.multiplyScalar(1 - dt * 2); u.mesh.position.y -= dt; }
         if (u.deathT <= 0) { this.scene.remove(u.mesh); this.units.splice(i, 1); }
       }
     }
@@ -3909,7 +3942,7 @@ export class Game {
       ent.hp = 0; ent.dead = true;
       const humanInvolved = this.isHuman(ent.owner);
       if (ent.kind === 'unit') {
-        ent.deathT = 0.8;
+        ent.deathT = ent.troopRig ? (ent.troopRig.actions.death?.getClip().duration ?? 1.0) : 0.8;
         this.burst(ent.x, this.gy(ent.x, ent.z) + 1, ent.z, humanInvolved ? 0x60a5fa : 0xf87171, 16, 6);
         if (humanInvolved) this.hookMsg(`${cap(ent.type)} lost`);
       } else {
