@@ -415,7 +415,16 @@ function makeJoint(bone) {
   return { name: bone.name, rest: bone.quaternion.clone(), axis };
 }
 
-const P_JOINTS = ['Thigh_L', 'Thigh_R', 'Calf_L', 'Calf_R', 'Upperarm_L', 'Upperarm_R'];
+// Arms + legs driven by the procedural stride; the lower arms let a carrying
+// villager cradle the log bundle in both hands.
+const P_JOINTS = ['Thigh_L', 'Thigh_R', 'Calf_L', 'Calf_R',
+  'Upperarm_L', 'Upperarm_R', 'Lowerarm_L', 'Lowerarm_R'];
+
+// Carry pose: shoulders swing forward and the elbows flex so both hands meet in
+// front of the chest, right where the log bundle sits (see makeLogBundle in
+// game.js — its local offset matches these angles).
+const CARRY_SHOULDER = -0.55;
+const CARRY_ELBOW = -0.9;
 
 export async function loadPeasantModels() {
   const base = basePath();
@@ -471,6 +480,8 @@ export function createPeasantRig(_colorHex = 0xffffff, scale = PEASANT_SCALE) {
     lift: v.lift * scale,
     phase: Math.random() * Math.PI * 2,
     walkW: 0,
+    carrying: false,
+    carryW: 0,
     joints,
   };
 }
@@ -496,8 +507,14 @@ function updatePeasantRig(rig, dt, walking, strideMps = 0) {
   peasantSwing(j.Thigh_R, s * 0.40 * k);
   peasantSwing(j.Calf_L, Math.max(0, -s) * 0.35 * k);
   peasantSwing(j.Calf_R, Math.max(0, s) * 0.35 * k);
-  peasantSwing(j.Upperarm_L, s * 0.26 * k);             // arms counter-swing
-  peasantSwing(j.Upperarm_R, -s * 0.26 * k);
+  // arms: counter-swing while empty, cradle the bundle while carrying
+  rig.carryW += ((rig.carrying ? 1 : 0) - rig.carryW) * Math.min(1, dt * 8);
+  const cw = rig.carryW;
+  const free = 1 - cw;
+  peasantSwing(j.Upperarm_L, s * 0.26 * k * free + CARRY_SHOULDER * cw);
+  peasantSwing(j.Upperarm_R, -s * 0.26 * k * free + CARRY_SHOULDER * cw);
+  peasantSwing(j.Lowerarm_L, CARRY_ELBOW * cw);
+  peasantSwing(j.Lowerarm_R, CARRY_ELBOW * cw);
   rig.root.position.y = rig.lift + Math.abs(s) * 0.05 * k;
   rig.root.rotation.z = s * 0.02 * k;
 }

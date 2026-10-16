@@ -20,6 +20,31 @@ function noPick(root) {
 const _sv = new THREE.Matrix4();
 const _tm = new THREE.Matrix4();
 
+// A bundle of three logs a worker cradles in both hands while hauling timber.
+// The local offset/size is tuned to the peasant rig's carry pose so the hands
+// grip the bundle ends (see CARRY_SHOULDER/CARRY_ELBOW in workers3d.js).
+function makeLogBundle() {
+  const g = new THREE.Group();
+  const bark = new THREE.MeshStandardMaterial({ color: 0x7c4a23, emissive: 0x3a2410, emissiveIntensity: 0.35, roughness: 0.95 });
+  const ring = new THREE.MeshStandardMaterial({ color: 0xc79a5b, emissive: 0x5a3d1c, emissiveIntensity: 0.3, roughness: 0.85 });
+  const at = [[0, 0.062, 0.072], [0, 0.062, -0.072], [0, 0.178, 0]];
+  at.forEach((p, i) => {
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.62, 7), bark);
+    log.rotation.z = Math.PI / 2;                 // lie along X, across the chest
+    log.position.set(...p);
+    g.add(log);
+    for (const s of [-0.31, 0.31]) {              // pale sawn ends
+      const cap = new THREE.Mesh(new THREE.CircleGeometry(0.062, 7), ring);
+      cap.position.set(s, p[1], p[2]);
+      cap.rotation.y = s > 0 ? -Math.PI / 2 : Math.PI / 2;
+      g.add(cap);
+    }
+    void i;
+  });
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+
 export class Game {
   constructor(canvas, hooks, assets = {}) {
     this.canvas = canvas;
@@ -738,11 +763,13 @@ export class Game {
     g.add(glow);
     let gem = null;
     if (type === 'worker') {
-      gem = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.7, 6),
-        new THREE.MeshStandardMaterial({ color: 0x8b5a2b, emissive: 0x5b3a1e, emissiveIntensity: 0.5, roughness: 0.9 }));
-      gem.rotation.z = Math.PI / 2;
-      gem.position.y = 1.5; gem.visible = false;
-      g.add(gem);
+      // timber bundle, cradled in both hands; parented to the rig so it
+      // disappears with the worker at distance and sways with the body
+      gem = makeLogBundle();
+      gem.position.set(0, 1.22, 0.38);
+      gem.visible = false;
+      noPick(gem);
+      (rig ? rig.root : g).add(gem);
     }
     g.position.set(x, this.gy(x, z), z);
     const bar = this.makeHealthBar(type === 'tank' || type === 'brute' ? 2 : 1.5);
@@ -2974,12 +3001,9 @@ export class Game {
         }
       }
       // selection ring pulse + worker cargo gem
-      if (u.rig) this.updateWorkerRig(u, dt, moved);
+      if (u.rig) { u.rig.carrying = u.carrying > 0; this.updateWorkerRig(u, dt, moved); }
       else if (u.trooper) updateTrooper(u.trooper, dt, moved, u.speed, (u.lastShotT ?? 99) < 0.35);
-      if (u.gem) {
-        u.gem.visible = u.carrying > 0;
-        if (u.gem.visible) u.gem.rotation.x += dt * 3;
-      }
+      if (u.gem) u.gem.visible = u.carrying > 0;
       if (u.ring.visible) {
         const s = 1 + Math.sin(this.time * 5) * 0.06;
         u.ring.scale.setScalar(s);
