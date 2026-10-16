@@ -341,10 +341,9 @@ export class KingdomBrain {
     const roll = Math.random();
     if (built('stable') && have('tank') < Math.ceil(P.tankShare * P.wantArmy) && roll < 0.5) return 'tank';
     if (built('siege') && have('artillery') < Math.ceil(P.artShare * P.wantArmy) && roll < 0.4) return 'artillery';
-    // caveman troops: brutes lead assaults, hunters screen from behind
-    if (S.rax.length >= 2 && have('brute') < Math.ceil(0.3 * P.wantArmy) && roll < 0.42) return 'brute';
+    // cavalry and hunters screen the frontline swordsmen
     if (built('archery') && have('hunter') < Math.ceil(0.35 * P.wantArmy) && roll < 0.5) return 'hunter';
-    return 'soldier';
+    return 'swordsman';
   }
 
   // pick a free production building that can actually train this unit

@@ -198,13 +198,6 @@ function capeOn(group, parts, team) {
 }
 
 const TROOPERS = {
-  soldier: (t) => {
-    const { group, parts } = baseTrooper(t);
-    helmet(group, parts, t, 'helm');
-    swordIn(parts, 1.0);
-    shieldOn(parts, t, 1);
-    return { group, parts };
-  },
   swordsman: (t) => {
     const { group, parts } = baseTrooper(t);
     helmet(group, parts, t, 'helm');

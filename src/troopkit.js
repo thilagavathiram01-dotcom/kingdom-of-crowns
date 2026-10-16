@@ -22,7 +22,6 @@ const DYE_JOINTS = new Set(['hips', 'spine', 'chest']);
 
 // unit type -> character + which held/back props to show + which attack clip
 export const TROOP_SPEC = {
-  soldier:       { char: 'knight',       show: ['1H_Sword', 'Round_Shield', 'Knight_Helmet'], atk: '1H_Melee_Attack_Chop' },
   swordsman:     { char: 'knight',       show: ['1H_Sword', 'Badge_Shield', 'Knight_Helmet'], atk: '1H_Melee_Attack_Chop' },
   spearman:      { char: 'knight',       show: ['Knight_Helmet'], spear: true, atk: '2H_Melee_Attack_Chop' },
   knight:        { char: 'knight',       show: ['2H_Sword', 'Knight_Cape', 'Knight_Helmet'], atk: '2H_Melee_Attack_Chop', run: true },
@@ -30,7 +29,6 @@ export const TROOP_SPEC = {
   scout:         { char: 'rogue_hooded', show: ['Knife', 'Rogue_Cape'], atk: '1H_Melee_Attack_Chop', run: true },
   spy:           { char: 'rogue',        show: ['Knife', 'Rogue_Cape'], atk: '1H_Melee_Attack_Chop', run: true },
   healer:        { char: 'mage',         show: ['2H_Staff', 'Mage_Hat', 'Mage_Cape'], atk: 'Spellcast_Shoot', ranged: true },
-  brute:         { char: 'barbarian',    show: ['2H_Axe', 'Barbarian_Hat'], atk: '2H_Melee_Attack_Chop' },
   hunter:        { char: 'rogue',        show: ['Throwable', 'Rogue_Cape'], atk: '1H_Ranged_Shoot', ranged: true, run: true },
   hero_king:     { char: 'knight',       show: ['1H_Sword', 'Round_Shield', 'Knight_Cape', 'Knight_Helmet'], atk: '1H_Melee_Attack_Chop' },
   hero_champion: { char: 'barbarian',    show: ['2H_Axe', 'Barbarian_Round_Shield'], atk: '2H_Melee_Attack_Chop' },
@@ -125,14 +123,20 @@ export async function loadTroopModels() {
 }
 
 // A pike/spear has no counterpart in the pack, so build one and hang it off the
-// right hand slot using the same local transform the swords use.
+// right hand slot using the same local transform the swords use. Materials and
+// geometry are built once and shared across every spearman rig.
+let _spearWood = null, _spearIron = null, _spearShaftGeo = null, _spearTipGeo = null;
 function makeSpear(handslot) {
+  if (!_spearWood) {
+    _spearWood = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.9 });
+    _spearIron = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.4, metalness: 0.4 });
+    _spearShaftGeo = new THREE.CylinderGeometry(0.028, 0.028, 3.1, 6);
+    _spearTipGeo = new THREE.ConeGeometry(0.075, 0.4, 6);
+  }
   const g = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.9 });
-  const iron = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.4, metalness: 0.4 });
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 3.1, 6), wood);
+  const shaft = new THREE.Mesh(_spearShaftGeo, _spearWood);
   shaft.position.y = 0.55;
-  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.4, 6), iron);
+  const tip = new THREE.Mesh(_spearTipGeo, _spearIron);
   tip.position.y = 2.28;
   g.add(shaft, tip);
   g.position.set(0, 0.033, 0);

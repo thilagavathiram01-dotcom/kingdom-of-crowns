@@ -72,7 +72,7 @@ function applyEvent(g, ev, victim) {
       const hq = g.hqOf(victim);
       if (!hq || !g.spawnUnit) break;
       for (let i = 0; i < 6; i++) {
-        g.spawnUnit('soldier', 'rebels', hq.x + (Math.random() - 0.5) * 20, hq.z + (Math.random() - 0.5) * 20);
+        g.spawnUnit('swordsman', 'rebels', hq.x + (Math.random() - 0.5) * 20, hq.z + (Math.random() - 0.5) * 20);
       }
       break;
     }

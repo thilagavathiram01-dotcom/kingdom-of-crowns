@@ -49,8 +49,8 @@ const W = CONFIG.buildings.wall;
 ok('wall costs 5 wood', CONFIG.wallCost === 5);
 ok('wall is long, thin and rotatable', W.size > 4 && W.thick < 1.5);
 ok('walls are cheap per metre', (W.size / CONFIG.wallCost) > 0.7);
-ok('caveman troops exist', !!CONFIG.units.brute && !!CONFIG.units.hunter);
-ok('caveman troops have train times', !!CONFIG.trainTime.brute && !!CONFIG.trainTime.hunter);
+ok('caveman troops exist', !!CONFIG.units.swordsman && !!CONFIG.units.hunter);
+ok('caveman troops have train times', !!CONFIG.trainTime.swordsman && !!CONFIG.trainTime.hunter);
 ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpacing >= 70);
 
 // ---------- 2. spawn: rotation + elastic length ----------
@@ -238,11 +238,11 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
     `ghost=(${rot1.x.toFixed(2)},${rot1.z.toFixed(2)})`);
   g.cancelPlacement();
 
-  // the new caveman troops are trainable and priced
+  // the caveman hunter is trainable and priced
   const hq = g.spawnBuilding('hq', 'k0', 0, 0);
   const bar = g.spawnBuilding('barracks', 'k0', 14, 0);
-  ok('HQ only trains workers', g.canTrain(hq, 'worker') && !g.canTrain(hq, 'brute'));
-  ok('barracks trains brute', g.canTrain(bar, 'brute'));
+  ok('HQ only trains workers', g.canTrain(hq, 'worker') && !g.canTrain(hq, 'spearman'));
+  ok('barracks trains spearman', g.canTrain(bar, 'spearman'));
   ok('hunter moved to the archery', !g.canTrain(bar, 'hunter'));
   const arc = g.spawnBuilding('archery', 'k0', 24, 0);
   ok('archery trains hunter', g.canTrain(arc, 'hunter'));
@@ -252,26 +252,26 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   arc.queue.length = 0; // reset: pricing block below queues fresh
   g.players.k0.logs = 1000;
   ok('barracks reject unknown units', !g.canTrain(bar, 'dragon'));
-  ok('brute costs its config price', g.unitCost('brute') === CONFIG.bruteCost);
+  ok('spearman costs its config price', g.unitCost('spearman') === 50);
   ok('hunter costs its config price', g.unitCost('hunter') === CONFIG.hunterCost);
   const before = g.players.k0.logs;
-  ok('queueing a brute succeeds', g.trainUnit(bar, 'brute'));
+  ok('queueing a spearman succeeds', g.trainUnit(bar, 'spearman'));
   ok('queueing a hunter succeeds', g.trainUnit(arc, 'hunter'));
   ok('troop prices come out of the treasury',
-    g.players.k0.logs === before - CONFIG.bruteCost - CONFIG.hunterCost, `logs=${g.players.k0.logs}`);
-  ok('the queue keeps both orders', bar.queue.length === 1 && arc.queue.length === 1 && bar.queue[0].type === 'brute' && arc.queue[0].type === 'hunter');
-  ok('queue times come from config', bar.queue[0].t === CONFIG.trainTime.brute && arc.queue[0].t === CONFIG.trainTime.hunter);
-  ok('a broke kingdom cannot queue', (g.players.k0.logs = 0, g.trainUnit(bar, 'brute') === false));
+    g.players.k0.logs === before - 50 - CONFIG.hunterCost, `logs=${g.players.k0.logs}`);
+  ok('the queue keeps both orders', bar.queue.length === 1 && arc.queue.length === 1 && bar.queue[0].type === 'spearman' && arc.queue[0].type === 'hunter');
+  ok('queue times come from config', bar.queue[0].t === CONFIG.trainTime.spearman && arc.queue[0].t === CONFIG.trainTime.hunter);
+  ok('a broke kingdom cannot queue', (g.players.k0.logs = 0, g.trainUnit(bar, 'spearman') === false));
 
   // both new units are real, shootable units
   g.players.k0.logs = 1000;
-  const brute = g.spawnUnit('brute', 'k0', 40, 6);
+  const spear = g.spawnUnit('spearman', 'k0', 40, 6);
   const hunter = g.spawnUnit('hunter', 'k0', 46, 6);
-  ok('brute is a real unit', brute && brute.type === 'brute' && !brute.dead && brute.hp === CONFIG.units.brute.hp);
+  ok('spearman is a real unit', spear && spear.type === 'spearman' && !spear.dead && spear.hp === CONFIG.units.spearman.hp);
   ok('hunter is a real unit', hunter && hunter.type === 'hunter' && hunter.hp === CONFIG.units.hunter.hp);
-  ok('brute out-ranges nothing but hits hard', brute.damage > CONFIG.units.soldier.damage);
-  ok('hunter out-ranges a brute', hunter.range > brute.range);
-  ok('brute is slower than a hunter', brute.speed < hunter.speed);
+  ok('spearman out-ranges a swordsman', spear.range > CONFIG.units.swordsman.range);
+  ok('hunter out-ranges a spearman', hunter.range > spear.range);
+  ok('spearman is slower than a hunter', spear.speed < hunter.speed);
 }
 
 
@@ -294,7 +294,7 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
 
   // steering uses the same full body radius as overlap resolution: walking
   // alongside a wall is fine, walking into it is not
-  const u = g.spawnUnit('soldier', 'k0', 0, 3);
+  const u = g.spawnUnit('swordsman', 'k0', 0, 3);
   const blockedAt = (px, pz) => g.buildingBlocks(w, px, pz, u.radius);
   ok('a unit may walk beside a wall', !blockedAt(0, 1.4), `d=1.4`);
   ok('a unit may stand past the wall end', !blockedAt(3.4, 0), `x=3.4`);
@@ -303,7 +303,7 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
 
   // a rotated wall is blocked along its own axis, not across it
   const v = g.spawnBuilding('wall', 'k0', 20, 0, Math.PI / 2, 4.6);
-  const pad = CONFIG.units.soldier.radius;
+  const pad = CONFIG.units.swordsman.radius;
   ok('a rotated wall blocks along Z', g.buildingBlocks(v, 20, 1.5, pad) && !g.buildingBlocks(v, 21.4, 0, pad));
   ok('a rotated wall is clear beside it', !g.buildingBlocks(v, 21.4, 1.5, pad));
 }
@@ -416,19 +416,19 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   const g = fakeGame();
   const hq = g.spawnBuilding('hq', 'k0', 0, 0);
   const rax = g.spawnBuilding('barracks', 'k0', 20, 0);
-  for (const [b, type] of [[hq, 'worker'], [rax, 'soldier']]) {
+  for (const [b, type] of [[hq, 'worker'], [rax, 'swordsman']]) {
     const r = CONFIG.units[type].radius;
     ok(`${b.type} default rally is free ground`, g.isSpotFree(b.rallyX, b.rallyZ, r), `${b.rallyX},${b.rallyZ}`);
     ok(`${b.type} default rally is outside its footprint`, !g.buildingBlocks(b, b.rallyX, b.rallyZ, r));
   }
   const moved = g.setBuildingRally(rax, rax.x, rax.z, true);
   ok('a rally click inside the barracks is moved outside', moved.x !== rax.x || moved.z !== rax.z);
-  ok('the normalized rally is free ground', g.isSpotFree(moved.x, moved.z, CONFIG.units.soldier.radius));
-  const trained = [g.completeTraining(rax, 'soldier'), g.completeTraining(rax, 'soldier'), g.completeTraining(rax, 'soldier')];
+  ok('the normalized rally is free ground', g.isSpotFree(moved.x, moved.z, CONFIG.units.swordsman.radius));
+  const trained = [g.completeTraining(rax, 'swordsman'), g.completeTraining(rax, 'swordsman'), g.completeTraining(rax, 'swordsman')];
   const keys = trained.map(u => `${u.tx.toFixed(3)},${u.tz.toFixed(3)}`);
   ok('queued troops get different rally destinations', new Set(keys).size === 3, keys.join(' '));
   ok('staged destinations are free when assigned',
-    trained.every(u => g.isSpotFree(u.tx, u.tz, CONFIG.units.soldier.radius)));
+    trained.every(u => g.isSpotFree(u.tx, u.tz, CONFIG.units.swordsman.radius)));
   for (const u of trained) { u.x = u.tx; u.z = u.tz; }
   g.resolveOverlaps();
   let worst = 0, inside = 0;
@@ -447,14 +447,14 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
 {
   const g = fakeGame();
   const wall = g.spawnBuilding('wall', 'k0', 0, 0, 0, 4.6);
-  const trapped = g.spawnUnit('soldier', 'k0', 20, 3);
+  const trapped = g.spawnUnit('swordsman', 'k0', 20, 3);
   trapped.x = 0; trapped.z = 0;
   g.resolveOverlaps();
   ok('a unit inside a wall is ejected', !g.buildingBlocks(wall, trapped.x, trapped.z, trapped.radius));
   ok('ejection keeps one body radius of standoff',
     g.footprintDist(wall, trapped.x, trapped.z) >= trapped.radius - 0.02);
-  const a = g.spawnUnit('soldier', 'k0', 30, 0);
-  const b = g.spawnUnit('soldier', 'k0', 34, 0);
+  const a = g.spawnUnit('swordsman', 'k0', 30, 0);
+  const b = g.spawnUnit('swordsman', 'k0', 34, 0);
   a.x = 30; a.z = 0; b.x = 30; b.z = 0;
   g.resolveOverlaps();
   ok('two units on the same point are separated',
@@ -492,7 +492,7 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
 {
   const g = fakeGame();
   g.spawnBuilding('wall', 'k0', 0, 0, 0, 4.6);
-  const r = CONFIG.units.soldier.radius;
+  const r = CONFIG.units.swordsman.radius;
   ok('a short hop across the wall is blocked', !g.losClear(0, -1.8, 0, 1.8, r));
   ok('the segment test sees the crossing', g.segmentBlocked(0, -1.8, 0, 1.8, r));
   ok('a parallel lane beside the wall stays clear', g.losClear(-2, 2, 2, 2, r));
@@ -506,7 +506,7 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   g.spawnBuilding('wall', 'k0', 0, 10, 0, 60);
   g.spawnBuilding('wall', 'k0', -30, 0, Math.PI / 2, 20);
   g.spawnBuilding('wall', 'k0', 30, 0, Math.PI / 2, 20);
-  const u = g.spawnUnit('soldier', 'k0', 0, 0);
+  const u = g.spawnUnit('swordsman', 'k0', 0, 0);
   const before = { x: u.x, z: u.z };
   const status = g.navigate(u, 100, 0, 0.1, 0.6, 2);
   ok('a sealed courtyard does not report a dead stop', status === 'moving', `status=${status}`);
@@ -616,8 +616,8 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   ok('tribute pays and pacifies', dip.offerTribute('k2', 'k1') === true
     && g.players.k1.wood === k1w + 200 && dip.underCeasefire('k2', 'k1'));
   // pact-bound pairs are never valid targets
-  const a = g.spawnUnit('soldier', 'k0', 0, 0);
-  const foe = g.spawnUnit('soldier', 'k1', 2, 0);
+  const a = g.spawnUnit('swordsman', 'k0', 0, 0);
+  const foe = g.spawnUnit('swordsman', 'k1', 2, 0);
   a.x = 0; a.z = 0; foe.x = 2; foe.z = 0;
   g.rebuildGrid();
   const found = g.nearestEnemy(0, 0, 'k0', 30);
@@ -638,8 +638,8 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   const hq0 = g.spawnBuilding('hq', 'k0', 0, 0);
   const hq1 = g.spawnBuilding('hq', 'k1', 120, 0);
   void hq0; void hq1;
-  for (let i = 0; i < 6; i++) g.spawnUnit('soldier', 'k0', 5 + i, 5);
-  for (let i = 0; i < 6; i++) g.spawnUnit('soldier', 'k1', 115 + i, 5);
+  for (let i = 0; i < 6; i++) g.spawnUnit('swordsman', 'k0', 5 + i, 5);
+  for (let i = 0; i < 6; i++) g.spawnUnit('swordsman', 'k1', 115 + i, 5);
   // challenge is free, freezes fighting, both sides muster and hold
   ok('challenge is free to issue', dip.challenge('k0', 'k1') === true);
   ok('challenge freezes targeting', dip.atPeace('k0', 'k1') === true);
@@ -684,8 +684,8 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   g4.hqRadiusOf = () => 70;
   g4.spawnBuilding('hq', 'k0', 0, 0);
   g4.spawnBuilding('hq', 'k1', 120, 0);
-  g4.spawnUnit('soldier', 'k0', 5, 5);
-  for (let i = 0; i < 10; i++) g4.spawnUnit('soldier', 'k1', 115 + i, 5);
+  g4.spawnUnit('swordsman', 'k0', 5, 5);
+  for (let i = 0; i < 10; i++) g4.spawnUnit('swordsman', 'k1', 115 + i, 5);
   dip4.challenge('k0', 'k1');
   const brain = new KingdomBrain(g4, 'k1');
   brain._chAnswerAt = 10; // deliberation over, window (90s) still open
@@ -707,13 +707,13 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   g.hqRadiusOf = () => 70;
   g.spawnBuilding('hq', 'k0', 0, 0);
   const wall = g.spawnBuilding('wall', 'k1', 30, 0, 0, 4.6);
-  const soldier = g.spawnUnit('soldier', 'k0', 28, 0);
+  const soldier = g.spawnUnit('swordsman', 'k0', 28, 0);
   void soldier;
   dip.relations.set(dip.key('k0', 'k1'), { type: 'ceasefire', until: 1000 });
   // breaching never chews through a pact partner's walls
   ok('breach skips pact walls', g.breachTarget({ owner: 'k0', x: 28, z: 0, radius: 0.75 }) !== wall);
   // broke manual strike on a pact partner is refused (no free betrayal)
-  const foe = g.spawnUnit('soldier', 'k1', 29, 0);
+  const foe = g.spawnUnit('swordsman', 'k1', 29, 0);
   ok('broke strike on pact partner refused', g.attackOrBetray([soldier], foe) === false && !soldier.target);
   // funded strike pays mobilization and converts to war
   g.players.k0.wood = 500; g.players.k0.food = 500;
@@ -758,7 +758,7 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   const bw = g.spawnBuilding('wall', 'k0', 195, -5, 0, 4.6);
   ok('intruder walls never make the demolish list', !brain.intrusions.has(bw.id));
   // demolish raid: brain sends fighters at the nearest recorded building
-  for (let i = 0; i < 8; i++) g.spawnUnit('soldier', 'k1', 190 + i, -10);
+  for (let i = 0; i < 8; i++) g.spawnUnit('swordsman', 'k1', 190 + i, -10);
   const S = { army: g.units.filter((u) => u.owner === 'k1' && !u.dead), rax: [] };
   brain.raidIntrusion(S, g.hqOf('k1'));
   ok('demolish raid launches at an intruder structure',
@@ -775,18 +775,32 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   g.players.k1 = { id: 'k1', idx: 1, logs: 500, wood: 500, food: 500, alive: true, color: 2, name: 'B' };
   g.humanId = 'kx'; // all-AI vision: no fog gating in headless combat checks
   const { buildTrooper, troopCacheStats } = await import('./src/troops3d.js');
-  for (const t of ['soldier', 'swordsman', 'spearman', 'archer', 'knight', 'scout', 'healer', 'spy']) {
+  for (const t of ['swordsman', 'spearman', 'archer', 'knight', 'scout', 'healer', 'spy']) {
     buildTrooper(t, 7);
   }
   const cs = troopCacheStats();
   ok('trooper meshes/materials are shared, not per-unit', cs.geos < 150 && cs.mats < 25, JSON.stringify(cs));
+  // unit meshes (body/glow/bar/ring) share materials + geometry across units
+  {
+    const ug = fakeGame();
+    ug.players.k1 = { id: 'k1', idx: 1, logs: 1000, color: 0x22c55e, alive: true };
+    for (let i = 0; i < 12; i++) {
+      ug.spawnUnit('worker', 'k0', i * 2, 0);
+      ug.spawnUnit('swordsman', 'k0', i * 2, 6);
+      ug.spawnUnit('swordsman', 'k1', i * 2, 12);
+    }
+    const mats = new Set(), geos = new Set();
+    for (const u of ug.units) u.mesh.traverse((o) => { if (o.isMesh) { mats.add(o.material); if (o.geometry) geos.add(o.geometry); } });
+    ok('36 unit meshes share a handful of materials', mats.size <= 24, `mats=${mats.size}`);
+    ok('36 unit meshes share a handful of geometries', geos.size <= 24, `geos=${geos.size}`);
+  }
   // melee infantry fight point-blank, not at gun range
   const { CONFIG: CFG } = await import('./src/config.js');
-  ok('swords flex in melee distance', CFG.units.swordsman.range <= 2.5 && CFG.units.soldier.range <= 2.5
+  ok('swords flex in melee distance', CFG.units.swordsman.range <= 2.5 && CFG.units.swordsman.range <= 2.5
     && CFG.units.spearman.range <= 3.0 && CFG.units.knight.range <= 2.5);
   // swordsman: slash arc + instant edge (no tracer spam)
   const sw = g.spawnUnit('swordsman', 'k0', 0, 0);
-  const foe = g.spawnUnit('soldier', 'k1', 2, 0);
+  const foe = g.spawnUnit('swordsman', 'k1', 2, 0);
   const hp0 = foe.hp, nProj = g.projectiles.length;
   sw.cd = 0; sw.target = foe;
   g.updateUnit(sw, 0.1);
@@ -794,7 +808,7 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
     && g.projectiles.slice(nProj).every((p) => p.slash === true));
   // archer: a real arrow flies (not a tracer dot)
   const ar = g.spawnUnit('archer', 'k0', 0, 10);
-  const foe2 = g.spawnUnit('soldier', 'k1', 8, 10);
+  const foe2 = g.spawnUnit('swordsman', 'k1', 8, 10);
   ar.cd = 0; ar.target = foe2;
   const n2 = g.projectiles.length;
   g.updateUnit(ar, 0.1);
@@ -802,7 +816,7 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   ok('archers loose arrow projectiles', shots.length === 1 && shots[0].kind === 'arrow');
   // spearman throws heavy spears
   const sp = g.spawnUnit('spearman', 'k0', 0, 20);
-  const foe3 = g.spawnUnit('soldier', 'k1', 2, 20);
+  const foe3 = g.spawnUnit('swordsman', 'k1', 2, 20);
   sp.cd = 0; sp.target = foe3;
   const n3 = g.projectiles.length;
   g.updateUnit(sp, 0.1);
@@ -923,20 +937,20 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   g.hqOf = (o) => g.buildings.find(b => b.owner === o && b.type === 'hq' && !b.dead);
   g.hqRadiusOf = () => 70;
   g.units = [
-    { id: 1, owner: 'k0', type: 'soldier', dead: false },
-    { id: 2, owner: 'k2', type: 'brute', dead: false },
-    { id: 3, owner: 'k2', type: 'brute', dead: false },
-    { id: 4, owner: 'k2', type: 'soldier', dead: false },
-    { id: 5, owner: 'k2', type: 'soldier', dead: false },
-    { id: 6, owner: 'k2', type: 'brute', dead: false },
-    { id: 7, owner: 'k2', type: 'soldier', dead: false },
+    { id: 1, owner: 'k0', type: 'swordsman', dead: false },
+    { id: 2, owner: 'k2', type: 'swordsman', dead: false },
+    { id: 3, owner: 'k2', type: 'swordsman', dead: false },
+    { id: 4, owner: 'k2', type: 'swordsman', dead: false },
+    { id: 5, owner: 'k2', type: 'swordsman', dead: false },
+    { id: 6, owner: 'k2', type: 'swordsman', dead: false },
+    { id: 7, owner: 'k2', type: 'swordsman', dead: false },
     { id: 8, owner: 'k2', type: 'worker', dead: false },
-    { id: 9, owner: 'k3', type: 'soldier', dead: false },
-    { id: 10, owner: 'k3', type: 'soldier', dead: false },
-    { id: 11, owner: 'k3', type: 'brute', dead: false },
-    { id: 12, owner: 'k3', type: 'soldier', dead: false },
-    { id: 13, owner: 'k3', type: 'soldier', dead: false },
-    { id: 14, owner: 'k3', type: 'brute', dead: false },
+    { id: 9, owner: 'k3', type: 'swordsman', dead: false },
+    { id: 10, owner: 'k3', type: 'swordsman', dead: false },
+    { id: 11, owner: 'k3', type: 'swordsman', dead: false },
+    { id: 12, owner: 'k3', type: 'swordsman', dead: false },
+    { id: 13, owner: 'k3', type: 'swordsman', dead: false },
+    { id: 14, owner: 'k3', type: 'swordsman', dead: false },
   ];
   const r = g.marchToDoomValley();
   ok('crusade gathers the willing kingdoms', r === true && g.crusade === true);
@@ -976,8 +990,8 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   g.hqRadiusOf = () => 70;
   // k2 fields a single fighter — too few to march, so it must refuse
   g.units = [
-    { id: 1, owner: 'k0', type: 'soldier', dead: false },
-    { id: 2, owner: 'k2', type: 'soldier', dead: false },
+    { id: 1, owner: 'k0', type: 'swordsman', dead: false },
+    { id: 2, owner: 'k2', type: 'swordsman', dead: false },
   ];
   g.marchToDoomValley();
   ok('an ally with too few troops refuses the call',
@@ -990,7 +1004,7 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   G.players = { k1: { id: 'k1', name: 'Doom King', alive: true }, k2: { id: 'k2', name: 'Ash', alive: true } };
   G.aliveKingdoms = () => ['k1', 'k2'];
   G.hqOf = (o) => (o === 'k2' ? { x: 100, z: 0 } : { x: 0, z: 0 });
-  const army = new Array(20).fill(0).map((_, i) => ({ id: i, type: 'brute', owner: 'k1', dead: false }));
+  const army = new Array(20).fill(0).map((_, i) => ({ id: i, type: 'swordsman', owner: 'k1', dead: false }));
   const br = { owner: 'k1', raidAt: 0, status: '', available: () => army, launch: () => {} };
   let launched = null;
   br.launch = (kind, foe, party) => { launched = { kind, foe, n: party.length }; };
@@ -1049,7 +1063,7 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
 
 // ---------- 34. KayKit Adventurer troop models ----------
 {
-  const want = ['soldier', 'swordsman', 'spearman', 'knight', 'archer', 'scout', 'spy', 'healer', 'brute', 'hunter', 'hero_king', 'hero_champion', 'hero_archmage'];
+  const want = ['swordsman', 'spearman', 'knight', 'archer', 'scout', 'spy', 'healer', 'hunter', 'hero_king', 'hero_champion', 'hero_archmage'];
   ok('every humanoid class maps to a troop model', want.every(t => TROOP_SPEC[t]));
   const chars = new Set(Object.values(TROOP_SPEC).map(s => s.char));
   ok('troop spec uses the adventurer characters', chars.size >= 4 && [...chars].every(c => ['knight', 'barbarian', 'mage', 'rogue', 'rogue_hooded'].includes(c)));

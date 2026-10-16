@@ -10,11 +10,9 @@ export const CONFIG = {
   startWood: 300,
   startFood: 250,
   workerCost: 50,
-  soldierCost: 100,
   tankCost: 175,
   scoutCost: 50,
   artilleryCost: 200,
-  bruteCost: 130,
   hunterCost: 85,
   barracksCost: 150,
   turretCost: 120,
@@ -27,15 +25,13 @@ export const CONFIG = {
   supplyPerTurret: 0,
   supplyPerHouse: 5,
 
-  trainTime: { worker: 6, soldier: 8, swordsman: 8, spearman: 8, archer: 8, knight: 12, tank: 14, scout: 6, artillery: 15, brute: 11, hunter: 8, healer: 10, catapult: 14, ram: 12, spy: 8, hero_king: 25, hero_champion: 25, hero_archmage: 30 },
+  trainTime: { worker: 6, swordsman: 8, spearman: 8, archer: 8, knight: 12, tank: 14, scout: 6, artillery: 15, hunter: 8, healer: 10, catapult: 14, ram: 12, spy: 8, hero_king: 25, hero_champion: 25, hero_archmage: 30 },
 
   units: {
     worker:   { hp: 75,  speed: 7.5, damage: 5,  range: 1.8, cooldown: 0.9, aggro: 6, sight: 13, harvestRate: 8, harvestTime: 2.0, radius: 0.7 },
-    soldier:  { hp: 150, speed: 7.0, damage: 12, range: 2.2, cooldown: 0.9, aggro: 15, sight: 16, radius: 0.75 },
     tank:     { hp: 300, speed: 5.2, damage: 26, range: 11.0, cooldown: 1.6, aggro: 16, sight: 17, radius: 1.0 },
     scout:    { hp: 60,  speed: 9.8, damage: 6,  range: 7.0, cooldown: 0.7, aggro: 13, sight: 28, radius: 0.6 },
     artillery:{ hp: 130, speed: 4.6, damage: 42, range: 16.0, cooldown: 2.8, aggro: 13, sight: 16, splash: 3.2, radius: 0.85 },
-    brute:    { hp: 280, speed: 6.2, damage: 22, range: 2.4, cooldown: 1.1, aggro: 14, sight: 15, radius: 0.85 },
     hunter:   { hp: 105, speed: 8.4, damage: 10, range: 7.5, cooldown: 0.65, aggro: 16, sight: 19, radius: 0.68 },
     swordsman:{ hp: 110, speed: 5.5, damage: 14, range: 2.2, cooldown: 0.9, aggro: 14, sight: 15, radius: 0.7 },
     spearman: { hp: 95,  speed: 5.2, damage: 12, range: 2.6, cooldown: 1.0, aggro: 14, sight: 15, radius: 0.7 },
@@ -137,7 +133,6 @@ export const DOOM = {
   accent: 0xff2d55,
   name: 'Doom King',
   startArmy: 16,         // extra fighters on top of the standard opener
-  startBrutes: 6,
   startWorkers: 8,
   startBarracks: 3,
   hqLevel: 3,            // Doomsvally already stands as a fortress
@@ -259,10 +254,8 @@ export const BUILD_REQUIRES = {
 export const UNIT_REQUIRES = {
   worker:        { building: 'hq', age: 0, name: 'Town Center (HQ)' },
   scout:         { building: 'hq', age: 0, name: 'Town Center (HQ)' },
-  soldier:       { building: 'barracks', age: 0, name: 'Barracks' },
   swordsman:     { building: 'barracks', age: 0, name: 'Barracks' },
   spearman:      { building: 'barracks', age: 0, name: 'Barracks' },
-  brute:         { building: 'barracks', age: 0, name: 'Barracks' },
   archer:        { building: 'archery', age: 1, name: 'Archery Range' },
   hunter:        { building: 'archery', age: 1, name: 'Archery Range' },
   knight:        { building: 'stable', age: 1, name: 'Stable' },
@@ -337,7 +330,7 @@ export const BUILD_DEFS = {
     cost: { wood: 150 },
     role: 'Infantry Proving Ground',
     purpose: 'Trains infantry · +8 supply',
-    feature: 'Drills frontline swordsmen, armor-piercing spearmen, and heavy club brutes. Expands military supply by +8.',
+    feature: 'Drills frontline swordsmen and armor-piercing spearmen. Expands military supply by +8.',
   },
   archery: {
     name: 'Archery Range',
@@ -459,15 +452,6 @@ export const UNIT_DEFS = {
     role: 'Reconnaissance Cavalry',
     desc: 'Swift horseman with massive 28m line of sight. Maps the terrain and tracks hostile troop movements.',
   },
-  soldier: {
-    name: 'Soldier',
-    icon: 'soldier',
-    cost: { food: 60, wood: 20 },
-    hp: 150,
-    speed: 7.0,
-    role: 'Infantry Warrior',
-    desc: 'Standard frontline foot soldier armed with shield and sword. Solid all-around melee combatant.',
-  },
   swordsman: {
     name: 'Swordsman',
     icon: 'soldier',
@@ -485,15 +469,6 @@ export const UNIT_DEFS = {
     speed: 5.2,
     role: 'Anti-Cavalry Guard',
     desc: 'Wields long pikes with extended melee reach. Deals 1.5× lethal counter damage against charging Knights.',
-  },
-  brute: {
-    name: 'Brute',
-    icon: 'brute',
-    cost: { food: 80, wood: 40 },
-    hp: 280,
-    speed: 6.2,
-    role: 'Heavy Brawler',
-    desc: 'Massive club-swinging barbarian. Boasts heavy health and crushes lightly armored foes in close quarters.',
   },
   archer: {
     name: 'Archer',
@@ -609,7 +584,7 @@ export const UNIT_DEFS = {
 export const COUNTERS = {
   spearman: { knight: 1.5 },
   knight: { archer: 1.5 },
-  archer: { swordsman: 1.5, spearman: 1.5, brute: 1.3 },
+  archer: { swordsman: 1.5, spearman: 1.5 },
 };
 
 export const HEROES = {

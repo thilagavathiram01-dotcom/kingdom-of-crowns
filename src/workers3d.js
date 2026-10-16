@@ -384,7 +384,7 @@ export const PEASANTS = [
   { file: 'peasant_6', sex: 'f' },
 ];
 
-export const PEASANT_SCALE = 1.0; // models are ~1.77 m tall at 1:1
+export const PEASANT_SCALE = 1.16; // models are ~1.77 m tall at 1:1; bumped so workers read at gameplay zoom
 
 const PEASANT_STRIDE = 6.5; // rad/s of stride at the 1.4 m/s baseline
 

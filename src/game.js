@@ -24,26 +24,107 @@ const _tm = new THREE.Matrix4();
 // A bundle of three logs a worker cradles in both hands while hauling timber.
 // The local offset/size is tuned to the peasant rig's carry pose so the hands
 // grip the bundle ends (see CARRY_SHOULDER/CARRY_ELBOW in workers3d.js).
+// Built ONCE and cloned per worker: Group.clone() shares geometry + material
+// refs, so a whole colony of haulers allocates no new GPU objects.
+let _logBundleTemplate = null;
 function makeLogBundle() {
+  if (_logBundleTemplate) return _logBundleTemplate.clone();
   const g = new THREE.Group();
   const bark = new THREE.MeshStandardMaterial({ color: 0x7c4a23, emissive: 0x3a2410, emissiveIntensity: 0.35, roughness: 0.95 });
   const ring = new THREE.MeshStandardMaterial({ color: 0xc79a5b, emissive: 0x5a3d1c, emissiveIntensity: 0.3, roughness: 0.85 });
+  const logGeo = new THREE.CylinderGeometry(0.062, 0.062, 0.62, 7);
+  const capGeo = new THREE.CircleGeometry(0.062, 7);
   const at = [[0, 0.062, 0.072], [0, 0.062, -0.072], [0, 0.178, 0]];
-  at.forEach((p, i) => {
-    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.62, 7), bark);
+  at.forEach((p) => {
+    const log = new THREE.Mesh(logGeo, bark);
     log.rotation.z = Math.PI / 2;                 // lie along X, across the chest
     log.position.set(...p);
     g.add(log);
     for (const s of [-0.31, 0.31]) {              // pale sawn ends
-      const cap = new THREE.Mesh(new THREE.CircleGeometry(0.062, 7), ring);
+      const cap = new THREE.Mesh(capGeo, ring);
       cap.position.set(s, p[1], p[2]);
       cap.rotation.y = s > 0 ? -Math.PI / 2 : Math.PI / 2;
       g.add(cap);
     }
-    void i;
   });
   g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-  return g;
+  _logBundleTemplate = g;
+  return g.clone();
+}
+
+// ---- shared unit materials + geometries --------------------------------
+// Every foot-soldier/worker used to build its own MeshStandardMaterial pair
+// and its own geometry objects. At a few hundred units that is thousands of
+// GPU buffers + programs churned every spawn and a steady GC drip during long
+// sessions ("system heat" + late-game lag). These are keyed/cached instead:
+// team colour varies per kingdom so materials are cached per colour, and the
+// primitive geometries are truly singleton.
+const _unitTeamMats = new Map();
+function unitTeamMat(color) {
+  let m = _unitTeamMats.get(color);
+  if (!m) { m = new THREE.MeshStandardMaterial({ color, roughness: 0.6 }); _unitTeamMats.set(color, m); }
+  return m;
+}
+const _unitDarkMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
+// distance (m) within which skinned unit rigs animate; farther units collapse
+// to a cheap stand-in. Lowered from 95 to cut GPU skinning + draw work.
+const RIG_LOD = 65;
+const _unitWoodMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.9 });
+const _unitTipMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.5, metalness: 0.3 });
+const _unitHiddenMat = new THREE.MeshBasicMaterial({ visible: false });
+const _unitGeo = {
+  troopStandin: new THREE.CapsuleGeometry(0.34, 0.9, 4, 8),
+  workerBox: new THREE.BoxGeometry(0.9, 0.9, 0.9),
+  workerHelm: new THREE.BoxGeometry(0.5, 0.3, 0.5),
+  hunterBody: new THREE.CapsuleGeometry(0.38, 0.8, 4, 10),
+  hunterShaft: new THREE.CylinderGeometry(0.05, 0.05, 2.3, 5),
+  hunterTip: new THREE.ConeGeometry(0.09, 0.34, 5),
+  hiddenBox: new THREE.BoxGeometry(0.01, 0.01, 0.01),
+  artBody: new THREE.BoxGeometry(1.4, 0.7, 2.4),
+  artTurret: new THREE.BoxGeometry(1.0, 0.6, 1.2),
+  artBarrel: new THREE.CylinderGeometry(0.14, 0.17, 2.2, 8),
+  fbBody: new THREE.BoxGeometry(1.5, 0.7, 2.1),
+  fbTurret: new THREE.CylinderGeometry(0.55, 0.55, 0.4, 10),
+  fbBarrel: new THREE.CylinderGeometry(0.1, 0.1, 1.6, 6),
+};
+const _glowGeos = new Map();
+function unitGlowGeo(r) {
+  const k = Math.round(r * 100);
+  let geo = _glowGeos.get(k);
+  if (!geo) { geo = new THREE.CircleGeometry(r, 24); _glowGeos.set(k, geo); }
+  return geo;
+}
+const _glowMats = new Map();
+function unitGlowMat(color) {
+  let m = _glowMats.get(color);
+  if (!m) { m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35 }); _glowMats.set(color, m); }
+  return m;
+}
+
+// health-bar / selection-ring primitives are shared too: a few thousand
+// entities each used to own two bar planes + a ring geometry + materials.
+const _barGeos = new Map();
+function barGeo(w) {
+  const rw = Math.round(w * 10) / 10; // 0.1 precision keeps the cache bounded
+  let geo = _barGeos.get(rw);
+  if (!geo) { geo = new THREE.PlaneGeometry(rw, 0.18); _barGeos.set(rw, geo); }
+  return geo;
+}
+const _barBgMat = new THREE.MeshBasicMaterial({ color: 0x111111, depthTest: false, transparent: true });
+const _barFgFriendly = new THREE.MeshBasicMaterial({ color: 0x4ade80, depthTest: false, transparent: true });
+const _barFgEnemy = new THREE.MeshBasicMaterial({ color: 0xef4444, depthTest: false, transparent: true });
+const _ringGeos = new Map();
+function ringGeo(radius) {
+  const k = Math.round(radius * 100);
+  let geo = _ringGeos.get(k);
+  if (!geo) { geo = new THREE.RingGeometry(radius - 0.12, radius, 32); _ringGeos.set(k, geo); }
+  return geo;
+}
+const _ringMats = new Map();
+function ringMat(color) {
+  let m = _ringMats.get(color);
+  if (!m) { m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, side: THREE.DoubleSide }); _ringMats.set(color, m); }
+  return m;
 }
 
 export class Game {
@@ -60,8 +141,10 @@ export class Game {
     this.troopModels = !!assets.troopModels;
     // KayKit castle/barracks/tower/wall models, or null -> procedural boxes
     this.buildingModels = !!assets.buildingModels;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia?.('(pointer: coarse)').matches;
+    // MSAA is a big fill-rate cost on phone GPUs and buys little at 1.25 DPR;
+    // keep it on desktop only.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !isTouch, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.25 : 1.5));
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0b0e14);
@@ -409,8 +492,8 @@ export class Game {
 
   makeHealthBar(w = 1.6) {
     const grp = new THREE.Group();
-    const bg = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.18), new THREE.MeshBasicMaterial({ color: 0x111111, depthTest: false, transparent: true }));
-    const fg = new THREE.Mesh(new THREE.PlaneGeometry(w, 0.18), new THREE.MeshBasicMaterial({ color: 0x4ade80, depthTest: false, transparent: true }));
+    const bg = new THREE.Mesh(barGeo(w), _barBgMat);
+    const fg = new THREE.Mesh(barGeo(w), _barFgFriendly);
     fg.position.z = 0.001;
     grp.add(bg, fg);
     noPick(grp);
@@ -420,16 +503,13 @@ export class Game {
     grp.userData.set = (pct, friendly) => {
       fg.scale.x = Math.max(0.001, pct);
       fg.position.x = -w * (1 - pct) / 2;
-      fg.material.color.set(friendly ? 0x4ade80 : 0xef4444);
+      fg.material = friendly ? _barFgFriendly : _barFgEnemy;
     };
     return grp;
   }
 
   addSelectionRing(obj, radius, color) {
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(radius - 0.12, radius, 32),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
-    );
+    const ring = new THREE.Mesh(ringGeo(radius), ringMat(color));
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.06;
     ring.visible = false;
@@ -501,8 +581,7 @@ export class Game {
         this.spawnBuilding(t, id, spot.x, spot.z);
       });
       const army = [];
-      for (let k = 0; k < DOOM.startArmy; k++) army.push(k % 4 === 3 ? 'hunter' : 'soldier');
-      for (let k = 0; k < DOOM.startBrutes; k++) army.push('brute');
+      for (let k = 0; k < DOOM.startArmy; k++) army.push(k % 4 === 3 ? 'hunter' : 'swordsman');
       army.forEach((t, k) => {
         const a = (k / army.length) * Math.PI * 2;
         const r = 12 + (k % 3) * 2;
@@ -517,7 +596,7 @@ export class Game {
       st.food = Math.round(st.food * 1.8);
       st.age = Math.max(st.age || 0, 1);
       for (let k = 0; k < 4; k++) this.spawnUnit('worker', id, s.x - 4 - k, s.z + 8);
-      for (let k = 0; k < 5; k++) this.spawnUnit(k % 2 ? 'brute' : 'soldier', id, s.x - 4 - k, s.z + 11);
+      for (let k = 0; k < 5; k++) this.spawnUnit(k % 2 ? 'archer' : 'swordsman', id, s.x - 4 - k, s.z + 11);
       const a = Math.PI * 0.5;
       const bx = THREE.MathUtils.clamp(s.x + Math.cos(a) * 9, -H + 6, H - 6);
       const bz = THREE.MathUtils.clamp(s.z + Math.sin(a) * 9, -H + 6, H - 6);
@@ -646,9 +725,8 @@ export class Game {
         this.isSpotFree(bx, bz, raxR + 0.5) ? bx : fx,
         this.isSpotFree(bx, bz, raxR + 0.5) ? bz : s.z + 1);
       for (let k = 0; k < 3; k++) this.spawnUnit('worker', id, s.x + 3 + k * 1.5, s.z + 5);
-      this.spawnUnit('soldier', id, s.x + 3, s.z + 8);
+      this.spawnUnit('swordsman', id, s.x + 3, s.z + 8);
       this.spawnUnit('scout', id, s.x + 5, s.z + 8);
-      this.spawnUnit('brute', id, s.x - 2, s.z + 7.5);
       if (this.doom) this.seedDoomKingdom(id, s, hq, H);
     });
 
@@ -673,7 +751,7 @@ export class Game {
     let rig = null;
     // Cave Man rig drives the club/spear troops; workers wear the medieval
     // peasants (men + women), then adventurers, then Cave Men, then plain boxes.
-    const CAVEMAN = { worker: 1, brute: 1.16, hunter: 0.94 };
+    const CAVEMAN = { worker: 1, hunter: 0.94 };
     const cav = CAVEMAN[type];
     if (type === 'worker' && this.peasantModels) rig = createPeasantRig(this.teamColor(owner));
     if (!rig && type === 'worker' && this.adventurerModels) rig = createAdventurerRig(this.teamColor(owner), ADVENTURER_SCALE);
@@ -682,60 +760,47 @@ export class Game {
     // knight, heroes …), with the procedural troopers kept as the fallback
     let troopRig = null;
     if (!rig && this.troopModels) troopRig = createTroopRig(type, this.teamColor(owner));
-    const mat = new THREE.MeshStandardMaterial({ color: this.teamColor(owner), roughness: 0.6 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
+    const mat = unitTeamMat(this.teamColor(owner));
+    const dark = _unitDarkMat;
     if (troopRig) {
       g.add(troopRig.root);
       // cheap team-coloured stand-in shown only past the LOD ring
-      body = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 0.9, 4, 8), mat);
+      body = new THREE.Mesh(_unitGeo.troopStandin, mat);
       body.position.y = 0.95;
       body.visible = false;
       g.userData.kitHeight = TROOP_HEIGHT;
     } else if (type === 'worker') {
       // box stays as the far-LOD stand-in once the Cave Man rig takes over
-      body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.9), mat);
+      body = new THREE.Mesh(_unitGeo.workerBox, mat);
       body.position.y = 0.55;
       if (rig) body.visible = false;
       else {
-        const helm = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.5), dark);
+        const helm = new THREE.Mesh(_unitGeo.workerHelm, dark);
         helm.position.y = 1.15; g.add(helm);
       }
-    } else if (type === 'brute') {
-      // club brawler: heavy shoulders, stone maul
-      body = new THREE.Mesh(new THREE.CapsuleGeometry(0.55, 0.6, 4, 10), mat);
-      body.position.y = 0.9;
-      if (rig) body.visible = false;
-      const maul = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 1.5, 6), dark);
-      maul.position.set(0.42, 1.15, 0.5); maul.rotation.x = 0.9; g.add(maul);
-      const knot = new THREE.Mesh(new THREE.IcosahedronGeometry(0.24, 0),
-        new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.9 }));
-      knot.position.set(0.62, 1.72, 0.95); g.add(knot);
     } else if (type === 'hunter') {
       // spear thrower: light frame, long reach
-      body = new THREE.Mesh(new THREE.CapsuleGeometry(0.38, 0.8, 4, 10), mat);
+      body = new THREE.Mesh(_unitGeo.hunterBody, mat);
       body.position.y = 0.85;
       if (rig) body.visible = false;
-      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.3, 5),
-        new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.9 }));
+      const shaft = new THREE.Mesh(_unitGeo.hunterShaft, _unitWoodMat);
       shaft.position.set(0.36, 1.15, 0.55); shaft.rotation.x = Math.PI / 2 - 0.12; g.add(shaft);
-      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.34, 5),
-        new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.5, metalness: 0.3 }));
+      const tip = new THREE.Mesh(_unitGeo.hunterTip, _unitTipMat);
       tip.position.set(0.36, 1.24, 1.7); tip.rotation.x = Math.PI / 2; g.add(tip);
-    } else if (type === 'soldier' || type === 'swordsman' || type === 'spearman' || type === 'archer' || type === 'knight' || type === 'scout' || type === 'healer' || type === 'spy' || type.startsWith('hero_')) {
+    } else if (type === 'swordsman' || type === 'spearman' || type === 'archer' || type === 'knight' || type === 'scout' || type === 'healer' || type === 'spy' || type.startsWith('hero_')) {
       // articulated class troopers (team-dyed) — no more dummy capsules
-      const tp = buildTrooper(type === 'soldier' ? 'swordsman' : type, this.teamColor(owner));
+      const tp = buildTrooper(type, this.teamColor(owner));
       g.add(tp.group);
-      body = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01),
-        new THREE.MeshBasicMaterial({ visible: false }));
+      body = new THREE.Mesh(_unitGeo.hiddenBox, _unitHiddenMat);
       body.position.y = 0;
       g.userData.kitHeight = tp.height;
       g.userData.trooper = tp.parts;
     } else if (type === 'artillery') {
-      body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.7, 2.4), mat);
+      body = new THREE.Mesh(_unitGeo.artBody, mat);
       body.position.y = 0.55;
-      const tur = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.6, 1.2), dark);
+      const tur = new THREE.Mesh(_unitGeo.artTurret, dark);
       tur.position.y = 1.1; g.add(tur);
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.17, 2.2, 8), dark);
+      const barrel = new THREE.Mesh(_unitGeo.artBarrel, dark);
       barrel.rotation.x = Math.PI / 2 - 0.25; barrel.position.set(0, 1.5, 1.4); g.add(barrel);
     } else {
       // articulated troopers (KayKit-Adventurers idiom, team-dyed tunic /
@@ -743,8 +808,7 @@ export class Game {
       const tp = buildTrooper(type, this.teamColor(owner));
       if (tp) {
         g.add(tp.group);
-        body = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01),
-          new THREE.MeshBasicMaterial({ visible: false }));
+        body = new THREE.Mesh(_unitGeo.hiddenBox, _unitHiddenMat);
         body.position.y = 0;
         g.userData.kitHeight = tp.height;
         g.userData.trooper = tp.parts;
@@ -752,16 +816,15 @@ export class Game {
         const kit = kitUnit(type, this.teamColor(owner));
         if (kit) {
           g.add(kit.group);
-          body = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01),
-            new THREE.MeshBasicMaterial({ visible: false }));
+          body = new THREE.Mesh(_unitGeo.hiddenBox, _unitHiddenMat);
           body.position.y = 0;
           g.userData.kitHeight = kit.height;
         } else {
-        body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.7, 2.1), mat);
+        body = new THREE.Mesh(_unitGeo.fbBody, mat);
         body.position.y = 0.55;
-        const tur = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.4, 10), dark);
+        const tur = new THREE.Mesh(_unitGeo.fbTurret, dark);
         tur.position.y = 1.05; g.add(tur);
-        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.6, 6), dark);
+        const barrel = new THREE.Mesh(_unitGeo.fbBarrel, dark);
         barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 1.05, 1.2); g.add(barrel);
         }
       }
@@ -770,8 +833,7 @@ export class Game {
     g.add(body);
     if (rig) g.add(rig.root);
     // team underglow disc + worker log bundle (carried timber)
-    const glow = new THREE.Mesh(new THREE.CircleGeometry(st.radius + 0.15, 24),
-      new THREE.MeshBasicMaterial({ color: this.teamColor(owner), transparent: true, opacity: 0.35 }));
+    const glow = new THREE.Mesh(unitGlowGeo(st.radius + 0.15), unitGlowMat(this.teamColor(owner)));
     glow.rotation.x = -Math.PI / 2; glow.position.y = 0.04;
     noPick(glow);
     g.add(glow);
@@ -786,9 +848,9 @@ export class Game {
       (rig ? rig.root : g).add(gem);
     }
     g.position.set(x, this.gy(x, z), z);
-    const bar = this.makeHealthBar(type === 'tank' || type === 'brute' ? 2 : 1.5);
+    const bar = this.makeHealthBar(type === 'tank' ? 2 : 1.5);
     bar.position.y = g.userData.kitHeight ? g.userData.kitHeight + 0.4
-      : type === 'tank' || type === 'brute' ? 2.2 : 2.0;
+      : type === 'tank' ? 2.2 : 2.0;
     g.add(bar);
     const ring = this.addSelectionRing(g, st.radius + 0.35, COLORS.select);
     this.scene.add(g);
@@ -2177,7 +2239,7 @@ export class Game {
   // ---------- orders from UI ----------
   unitCost(type) {
     const table = {
-      worker: CONFIG.workerCost, soldier: CONFIG.soldierCost, brute: CONFIG.bruteCost,
+      worker: CONFIG.workerCost,
       hunter: CONFIG.hunterCost, tank: CONFIG.tankCost, scout: CONFIG.scoutCost, artillery: CONFIG.artilleryCost,
       swordsman: 60, spearman: 50, archer: 55, knight: 110, healer: 60, catapult: 150, ram: 100, spy: 100,
       hero_king: 400, hero_champion: 400, hero_archmage: 450,
@@ -2191,7 +2253,7 @@ export class Game {
       archer: { food: 40, wood: 30 }, knight: { food: 90, wood: 40 }, scout: { food: 40 },
       healer: { food: 60 }, catapult: { wood: 120, food: 60 }, ram: { wood: 100, food: 20 }, spy: { food: 100 },
       hero_king: { food: 200, wood: 200 }, hero_champion: { food: 200, wood: 200 }, hero_archmage: { food: 200, wood: 250 },
-      soldier: { food: 60, wood: 20 }, tank: { food: 90, wood: 40 }, brute: { food: 70, wood: 20 },
+      tank: { food: 90, wood: 40 },
       hunter: { food: 50, wood: 20 }, artillery: { wood: 120, food: 60 },
     };
     if (multi[type]) return multi[type];
@@ -2204,7 +2266,7 @@ export class Game {
       if (['hero_king', 'hero_champion', 'hero_archmage'].includes(type)) return true;
       return false;
     }
-    if (building.type === 'barracks') return ['soldier', 'swordsman', 'spearman', 'brute'].includes(type);
+    if (building.type === 'barracks') return ['swordsman', 'spearman'].includes(type);
     if (building.type === 'archery') return ['archer', 'hunter', 'scout'].includes(type);
     if (building.type === 'stable') return ['knight', 'scout', 'tank'].includes(type);
     if (building.type === 'siege') return ['catapult', 'ram', 'artillery'].includes(type);
@@ -2865,7 +2927,7 @@ export class Game {
   // only rigs inside the fog ring animate and the rest fall back to a plain box.
   updateWorkerRig(u, dt, moved) {
     const r = u.rig;
-    const near = Math.hypot(u.x - this.camTarget.x, u.z - this.camTarget.z) < 95;
+    const near = Math.hypot(u.x - this.camTarget.x, u.z - this.camTarget.z) < RIG_LOD;
     if (near !== r.root.visible) {
       r.root.visible = near;
       if (u.body) u.body.visible = !near;
@@ -2889,7 +2951,7 @@ export class Game {
   // their skinned animation; distant ones collapse to the (invisible) body box.
   updateTroop(u, dt, moved) {
     const r = u.troopRig;
-    const near = Math.hypot(u.x - this.camTarget.x, u.z - this.camTarget.z) < 95;
+    const near = Math.hypot(u.x - this.camTarget.x, u.z - this.camTarget.z) < RIG_LOD;
     if (near !== r.root.visible) {
       r.root.visible = near;
       if (u.body) u.body.visible = !near;
@@ -3012,8 +3074,9 @@ export class Game {
         u.stuckT = 0;
       }
       u.lastX = u.x; u.lastZ = u.z;
-      // mesh sync (ride the terrain) + health bar (shown only when hurt/selected)
-      u.mesh.position.set(u.x, this.gy(u.x, u.z), u.z);
+      // health bar (shown only when hurt/selected). Mesh position is synced
+      // AFTER resolveOverlaps so the visual follows the final, de-overlapped
+      // spot in the same frame instead of trailing one frame behind.
       const showBar = u.hp < u.maxHp || u.ring.visible;
       u.bar.visible = showBar;
       if (showBar) {
@@ -3043,6 +3106,11 @@ export class Game {
       }
     }
     this.resolveOverlaps();
+    // single terrain-follow sync for every unit, now that separation is final
+    for (const u of this.units) {
+      if (u.dead) continue;
+      u.mesh.position.set(u.x, this.gy(u.x, u.z), u.z);
+    }
 
     // projectiles
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
@@ -3306,7 +3374,7 @@ export class Game {
           const dist = from.distanceTo(to);
           // swords flex point-blank (slash arc + instant edge), archers loose
           // real arrows, spearmen throw, engines lob arcing stones
-          const MELEE = { swordsman: 1, soldier: 1, knight: 1, brute: 1, ram: 1 };
+          const MELEE = { swordsman: 1, knight: 1, ram: 1 };
           if (MELEE[u.type]) {
             this.spawnSlash(to.x, to.y, to.z, Math.atan2(to.x - from.x, to.z - from.z));
             this.damage(t, u.damage, u.owner, u.type);
@@ -3926,7 +3994,7 @@ export class Game {
     // README-2 counter triangle x1.5 (spear>knight, knight>archer, archer>infantry)
     let mul = 1;
     try {
-      const row = { spearman: { knight: 1.5 }, knight: { archer: 1.5 }, archer: { swordsman: 1.5, spearman: 1.5, soldier: 1.5 } }[attackerType];
+      const row = { spearman: { knight: 1.5 }, knight: { archer: 1.5 }, archer: { swordsman: 1.5, spearman: 1.5 } }[attackerType];
       if (row && ent.type && row[ent.type]) mul = row[ent.type];
     } catch { /* ignore */ }
     ent.hp -= amt * mul;

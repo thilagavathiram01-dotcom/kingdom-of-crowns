@@ -3,7 +3,6 @@ import { icon } from './icons.js';
 
 const UNIT_META = {
   worker: { name: 'Worker', icon: 'worker', cost: () => 50, desc: 'Gather, build, mill' },
-  soldier: { name: 'Soldier', icon: 'soldier', cost: () => 60, desc: 'Core fighter' },
   swordsman: { name: 'Swordsman', icon: 'soldier', cost: () => 60, desc: 'Frontline melee' },
   spearman: { name: 'Spearman', icon: 'spear', cost: () => 50, desc: 'Anti-cavalry ×1.5 vs Knight' },
   archer: { name: 'Archer', icon: 'archer', cost: () => 55, desc: 'Ranged marksman' },
@@ -18,7 +17,6 @@ const UNIT_META = {
   hero_champion: { name: 'The Champion', icon: 'shield', cost: () => 400, desc: 'Shield Wall: -30% damage' },
   hero_archmage: { name: 'The Archmage', icon: 'archer', cost: () => 450, desc: 'Tempest Storm area damage' },
   artillery: { name: 'Artillery', icon: 'artillery', cost: () => 180, desc: 'Long-range splash' },
-  brute: { name: 'Brute', icon: 'brute', cost: () => 90, desc: 'Close-quarters brawler' },
   hunter: { name: 'Hunter', icon: 'hunter', cost: () => 70, desc: 'Spear skirmisher' },
 };
 const BLD_META = {
@@ -689,7 +687,7 @@ export class HUD {
 
       } else if (single.type === 'barracks') {
         this.elBuild.appendChild(rallyHint);
-        for (const t of ['soldier', 'swordsman', 'spearman', 'brute']) ap(this.trainBtn(single, t));
+        for (const t of ['swordsman', 'spearman']) ap(this.trainBtn(single, t));
         ap(demolish());
         ap(this.actBtn('wall', 'Wall', 'Fortify perimeter', () => g.startPlacement('wall'), CONFIG.wallCost, 'wall'));
       } else if (single.type === 'archery') {
@@ -809,7 +807,7 @@ export class HUD {
       const hq = g.buildings.find(b => b.owner === g.humanId && b.type === 'hq' && !b.dead);
       if (hq) ap(this.trainBtn(hq, 'worker'));
       const rax = g.buildings.find(b => b.owner === g.humanId && b.type === 'barracks' && !b.dead);
-      if (rax) ap(this.trainBtn(rax, 'soldier'));
+      if (rax) ap(this.trainBtn(rax, 'swordsman'));
       const place = (t) => {
         const m = BUILD_DEFS[t] || BLD_META[t];
         if (m) ap(this.actBtn(m.icon, m.name, `Place ${m.name}`, () => g.startPlacement(t), 0, t));
