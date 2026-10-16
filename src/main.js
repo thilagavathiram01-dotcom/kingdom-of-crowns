@@ -6,7 +6,7 @@ import { installRealms } from './realms.js';
 import { installWar } from './war.js';
 import { configureMode } from './config.js';
 import { listRooms, searchRooms, createRoom, joinRoom } from './rooms.js';
-import { loadWorkerModels, loadAdventurerModels } from './workers3d.js';
+import { loadWorkerModels, loadAdventurerModels, loadPeasantModels } from './workers3d.js';
 import { loadBuildingModels } from './buildings3d.js';
 
 // visible error surface: never freeze silently — show what broke
@@ -162,7 +162,7 @@ function unmuteMusic() {
 let hud, ai, game = null;
 let loopStarted = false;
 const clock = new THREE.Clock();
-const assets = { workerModels: null, buildingModels: null, adventurerModels: null };
+const assets = { workerModels: null, buildingModels: null, adventurerModels: null, peasantModels: null };
 
 function hideAllMenus() {
   for (const id of ['mode-select', 'rooms-screen', 'create-room-modal', 'lobby-screen', 'doom-story']) {
@@ -280,6 +280,13 @@ async function boot() {
   } catch (err) {
     console.warn('adventurer models unavailable — workers fall back to Cave Man rigs', err);
     setBoot(64);
+  }
+  try {
+    assets.peasantModels = await loadPeasantModels();
+    setBoot(74);
+  } catch (err) {
+    console.warn('peasant models unavailable — workers fall back to adventurer rigs', err);
+    setBoot(74);
   }
   try {
     assets.buildingModels = await loadBuildingModels();

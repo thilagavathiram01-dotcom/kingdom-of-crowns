@@ -8,6 +8,7 @@ import { KingdomBrain } from './src/ai.js';
 import { Diplomacy } from './src/diplomacy.js';
 import { generateTerrain, onBridge } from './src/terrain.js';
 import { doomRaid } from './src/war.js';
+import { PEASANTS, PEASANT_SCALE } from './src/workers3d.js';
 
 let pass = 0, fail = 0;
 const ok = (n, c, d = '') => { if (c) { pass++; console.log('PASS', n); } else { fail++; console.log('FAIL', n, d); } };
@@ -1026,6 +1027,23 @@ ok('map is bigger + spacing floor', CONFIG.mapSize >= 480 && CONFIG.kingdomSpaci
   const d = g.kingdomSpawns[DOOM.doomIdx];
   ok('doom kingdom spawns at the map centre', Math.hypot(d.x, d.z) < 20);
   ok('the player is pushed off the centre', Math.hypot(g.kingdomSpawns[0].x, g.kingdomSpawns[0].z) > 100);
+}
+
+// ---------- 33. Medieval peasant workers (men + women) ----------
+{
+  ok('peasant roster has six villagers', PEASANTS.length === 6);
+  ok('peasants are three men and three women',
+    PEASANTS.filter(p => p.sex === 'm').length === 3 && PEASANTS.filter(p => p.sex === 'f').length === 3);
+  ok('peasant files are unique', new Set(PEASANTS.map(p => p.file)).size === 6);
+  ok('peasant scale stands a human villager', PEASANT_SCALE > 0.6 && PEASANT_SCALE < 1.6);
+  let present = 0;
+  for (const p of PEASANTS) {
+    try { if (readFileSync(`public/models/peasants/${p.file}.glb`).length > 50000) present++; } catch { /* missing */ }
+  }
+  ok('every peasant model ships in the build', present === 6, `present=${present}`);
+  let atlas = 0;
+  try { atlas = readFileSync('public/textures/peasant_atlas.png').length; } catch { /* missing */ }
+  ok('the peasant texture atlas ships in the build', atlas > 500);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -1,7 +1,8 @@
-# Model & Audio Credits (CC0 only)
+# Model & Audio Credits
 
-War of Crowns uses only **CC0 (public domain)** packs. Verify the licence on each
-pack's page before downloading — packs and terms can change.
+War of Crowns uses **CC0 (public domain)** packs plus one **Craftpix royalty-free**
+pack (see the peasants row). Verify the licence on each pack's page before
+downloading — packs and terms can change.
 
 | Pack | Author / Source | URL | Licence | Used for |
 |---|---|---|---|---|
@@ -13,6 +14,7 @@ pack's page before downloading — packs and terms can change.
 | Fantasy characters (animated) | Quaternius | https://quaternius.com | CC0 | Knight, ranger |
 | Medieval Builder pack | KayKit | https://kaylousberg.itch.io | CC0 tier | Worker builder |
 | Adventurers / Skeletons | KayKit | https://kaylousberg.itch.io | CC0 tier | Swordsman, archer |
+| Medieval 3D people (peasants, men + women) | Craftpix / Free Game Assets | https://craftpix.net/freebies/free-medieval-3d-people-low-poly-models/ | Craftpix free (royalty-free, unlimited projects) | Worker villagers |
 | Audio pack | Kenney | https://kenney.nl/assets | CC0 | UI + battle sounds |
 
 Single props via Poly Pizza (https://poly.pizza, filter CC0 only) and

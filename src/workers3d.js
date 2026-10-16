@@ -180,6 +180,7 @@ export function createWorkerRig(colorHex, scale = WORKER_SCALE) {
 // Rigs with real walk/idle clips (adventurers) crossfade the clips instead,
 // with the stride rate matched to ground speed so feet stop moonwalking.
 export function updateWorkerRig(rig, dt, walking, strideMps = 0) {
+  if (rig.peasant) { updatePeasantRig(rig, dt, walking, strideMps); return; }
   rig.walkW += ((walking ? 1 : 0) - rig.walkW) * Math.min(1, dt * 7);
   if (rig.walkAction) {
     rig.walkAction.weight = rig.walkW;
@@ -365,4 +366,138 @@ export function createAdventurerRig(colorHex, scale = ADVENTURER_SCALE) {
     rig.walkAction.weight = 0;
   }
   return rig;
+}
+// ---------------------------------------------------------------------------
+// Craftpix "Free Medieval 3D People" peasants — the natural worker look.
+//
+// The source FBX are a T-pose UE-style rig with no animation, so the meshes are
+// baked offline (see the arm-down A-pose in the .glb) and the walk here is a
+// procedural stride driven through the same thigh/calf bones the Cave Man rig
+// uses. Men (peasant_1/3/5) and women (peasant_2/4/6) are picked at random per
+// worker so a crowd reads naturally. Rights: Craftpix royalty-free file license.
+export const PEASANTS = [
+  { file: 'peasant_1', sex: 'm' },
+  { file: 'peasant_2', sex: 'f' },
+  { file: 'peasant_3', sex: 'm' },
+  { file: 'peasant_4', sex: 'f' },
+  { file: 'peasant_5', sex: 'm' },
+  { file: 'peasant_6', sex: 'f' },
+];
+
+export const PEASANT_SCALE = 1.0; // models are ~1.77 m tall at 1:1
+
+const PEASANT_STRIDE = 6.5; // rad/s of stride at the 1.4 m/s baseline
+
+let PEASANT_LIB = null;
+
+// kingdom-cloth dye joints are intentionally ignored: the peasants keep their
+// baked atlas colours (natural villagers), ownership reads from the underglow
+// disc + selection ring, exactly like the troops.
+function peasantMaterial(atlas) {
+  return new THREE.MeshStandardMaterial({
+    map: atlas,
+    roughness: 0.9,
+    metalness: 0.0,
+    emissiveMap: atlas,
+    emissive: 0xffffff,
+    emissiveIntensity: 0.08, // keeps villagers legible at RTS zoom
+  });
+}
+
+// A joint records the bone's rest pose plus the local axis that maps to a world
+// X rotation, so a procedural stride swings legs/arms forward-back no matter
+// how the source rig oriented its bones.
+function makeJoint(bone) {
+  if (!bone) return null;
+  const pw = new THREE.Quaternion();
+  (bone.parent || bone).getWorldQuaternion(pw);
+  const axis = new THREE.Vector3(1, 0, 0).applyQuaternion(pw.clone().invert()).normalize();
+  return { name: bone.name, rest: bone.quaternion.clone(), axis };
+}
+
+const P_JOINTS = ['Thigh_L', 'Thigh_R', 'Calf_L', 'Calf_R', 'Upperarm_L', 'Upperarm_R'];
+
+export async function loadPeasantModels() {
+  const base = basePath();
+  const atlas = await new THREE.TextureLoader().loadAsync(base + 'textures/peasant_atlas.png');
+  atlas.colorSpace = THREE.SRGBColorSpace;
+  atlas.anisotropy = 4;
+
+  const loader = new GLTFLoader();
+  const variants = [];
+  for (const { file, sex } of PEASANTS) {
+    const gltf = await loader.loadAsync(base + 'models/peasants/' + file + '.glb');
+    const scene = gltf.scene;
+    let body = null;
+    const joints = {};
+    scene.traverse((o) => {
+      if (o.isSkinnedMesh) { body = o; o.castShadow = true; o.frustumCulled = false; }
+      if (o.isBone && P_JOINTS.includes(o.name)) joints[o.name] = makeJoint(o);
+    });
+    scene.updateMatrixWorld(true);
+    const lift = -new THREE.Box3().setFromObject(scene).min.y;
+    variants.push({ scene, sex, joints, lift });
+  }
+
+  PEASANT_LIB = { variants, material: peasantMaterial(atlas), atlas };
+  return PEASANT_LIB;
+}
+
+// Pick a random man or woman and return a rig in the same shape the game's
+// animateWorkerRig expects (root/lift/phase/walkW + peasant stride joints).
+export function createPeasantRig(_colorHex = 0xffffff, scale = PEASANT_SCALE) {
+  if (!PEASANT_LIB) return null;
+  const pool = PEASANT_LIB.variants.filter((v) => v.sex === (Math.random() < 0.5 ? 'm' : 'f'));
+  const v = pool[Math.floor(Math.random() * pool.length)] || PEASANT_LIB.variants[0];
+  const model = skeletonClone(v.scene);
+  model.traverse((o) => { if (o.isSkinnedMesh) o.material = PEASANT_LIB.material; });
+  model.scale.setScalar(scale);
+
+  const joints = {};
+  for (const name of P_JOINTS) {
+    const vid = v.joints[name];
+    const bone = model.getObjectByName(name);
+    joints[name] = bone ? { bone, rest: vid.rest.clone(), axis: vid.axis.clone() } : null;
+  }
+
+  const root = new THREE.Group();
+  root.position.y = v.lift * scale;
+  root.add(model);
+
+  return {
+    peasant: true,
+    sex: v.sex,
+    root,
+    lift: v.lift * scale,
+    phase: Math.random() * Math.PI * 2,
+    walkW: 0,
+    joints,
+  };
+}
+
+const _pSwingQ = new THREE.Quaternion();
+function peasantSwing(j, ang) {
+  if (!j || !j.bone) return;
+  _pSwingQ.setFromAxisAngle(j.axis, ang);
+  j.bone.quaternion.copy(j.rest).premultiply(_pSwingQ);
+}
+
+function updatePeasantRig(rig, dt, walking, strideMps = 0) {
+  rig.walkW += ((walking ? 1 : 0) - rig.walkW) * Math.min(1, dt * 8);
+  const k = rig.walkW;
+  if (k > 0.01) {
+    const spd = THREE.MathUtils.clamp((strideMps || 1.4) / 1.4, 0.55, 3);
+    rig.phase += dt * PEASANT_STRIDE * spd;
+  }
+  const s = Math.sin(rig.phase);
+  const j = rig.joints;
+  // +s -> left leg forward, right back; knee folds on the trailing leg
+  peasantSwing(j.Thigh_L, -s * 0.40 * k);
+  peasantSwing(j.Thigh_R, s * 0.40 * k);
+  peasantSwing(j.Calf_L, Math.max(0, -s) * 0.35 * k);
+  peasantSwing(j.Calf_R, Math.max(0, s) * 0.35 * k);
+  peasantSwing(j.Upperarm_L, s * 0.26 * k);             // arms counter-swing
+  peasantSwing(j.Upperarm_R, -s * 0.26 * k);
+  rig.root.position.y = rig.lift + Math.abs(s) * 0.05 * k;
+  rig.root.rotation.z = s * 0.02 * k;
 }

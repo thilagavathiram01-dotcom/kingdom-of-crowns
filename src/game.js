@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG, COLORS, kingdomColor, kingdomName, BUILD_REQUIRES, UNIT_REQUIRES, BUILD_DEFS, UNIT_DEFS, TRAIN_AGE, AGE_NAMES, HQ_LEVELS, NEW_HQ_COST, MAX_HQ_PER_KINGDOM, DOOM } from './config.js';
 import { generateTerrain, buildTerrainVisuals, riverX, applyFlatten, scoreSite } from './terrain.js';
-import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE, createAdventurerRig, ADVENTURER_SCALE } from './workers3d.js';
+import { createWorkerRig, updateWorkerRig as animateWorkerRig, WORKER_SCALE, createAdventurerRig, ADVENTURER_SCALE, createPeasantRig, PEASANT_SCALE } from './workers3d.js';
 import { buildingModel } from './buildings3d.js';
 import { kitBuilding, kitUnit } from './kit.js';
 import { buildTrooper, updateTrooper } from './troops3d.js';
@@ -28,6 +28,8 @@ export class Game {
     this.workerModels = !!assets.workerModels;
     // medieval adventurer models for workers, or null -> Cave Man / box fallback
     this.adventurerModels = !!assets.adventurerModels;
+    // Craftpix medieval peasants (men + women) as the natural worker look
+    this.peasantModels = !!assets.peasantModels;
     // KayKit castle/barracks/tower/wall models, or null -> procedural boxes
     this.buildingModels = !!assets.buildingModels;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -641,11 +643,12 @@ export class Game {
     const g = new THREE.Group();
     let body;
     let rig = null;
-    // Cave Man rig drives the club/spear troops; workers wear the adventurer
-    // models first and fall back to the Cave Man rig, then plain boxes.
+    // Cave Man rig drives the club/spear troops; workers wear the medieval
+    // peasants (men + women), then adventurers, then Cave Men, then plain boxes.
     const CAVEMAN = { worker: 1, brute: 1.16, hunter: 0.94 };
     const cav = CAVEMAN[type];
-    if (type === 'worker' && this.adventurerModels) rig = createAdventurerRig(this.teamColor(owner), ADVENTURER_SCALE);
+    if (type === 'worker' && this.peasantModels) rig = createPeasantRig(this.teamColor(owner));
+    if (!rig && type === 'worker' && this.adventurerModels) rig = createAdventurerRig(this.teamColor(owner), ADVENTURER_SCALE);
     if (!rig && cav && this.workerModels) rig = createWorkerRig(this.teamColor(owner), WORKER_SCALE * cav);
     const mat = new THREE.MeshStandardMaterial({ color: this.teamColor(owner), roughness: 0.6 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
